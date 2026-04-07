@@ -198,7 +198,7 @@ class TimmModel(nn.Module):
             if 'v2' in self.backbone_name:
                 self.bk_checkpoint = 'pretrained/convnextv2_base_22k_224_ema.pt'
             else:
-                self.bk_checkpoint = 'pretrained/convnext_base_22k_1k_224.pth'
+                self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_base_22k_1k_224.pth'
         else:
             self.bk_checkpoint = None
 
@@ -546,7 +546,7 @@ class TimmModel_u(nn.Module):
             if 'v2' in self.backbone_name:
                 self.bk_checkpoint = 'pretrained/convnextv2_base_22k_224_ema.pt'
             else:
-                self.bk_checkpoint = 'pretrained/convnext_base_22k_1k_224.pth'
+                self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_base_22k_1k_224.pth'
         else:
             self.bk_checkpoint = None
 

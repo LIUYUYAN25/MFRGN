@@ -1,0 +1,3 @@
+
+Model: convnext_base.fb_in22k_ft_in1k
+{'input_size': (3, 224, 224), 'interpolation': 'bicubic', 'mean': (0.485, 0.456, 0.406), 'std': (0.229, 0.224, 0.225), 'crop_pct': 0.875, 'crop_mode': 'center'}

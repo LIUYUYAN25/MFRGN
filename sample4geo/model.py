@@ -17,9 +17,9 @@ class TimmModel(nn.Module):
         
         self.img_size = img_size
         if 'tiny' in model_name:
-            bk_checkpoint = 'pretrained/convnext_tiny_22k_1k_224.pth'
+            bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_tiny_22k_1k_224.pth'
         elif 'base' in model_name:
-            bk_checkpoint = 'pretrained/convnext_base_22k_1k_224.pth'
+            bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_base_22k_1k_224.pth'
         
         if '384' in bk_checkpoint:
             bk_checkpoint = bk_checkpoint.replace('224', '384')

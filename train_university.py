@@ -39,12 +39,12 @@ class Configuration:
     custom_sampling: bool = True         # use custom sampling instead of random
     seed = 1
     epochs: int = 3
-    batch_size: int = 96                # keep in mind real_batch_size = 2 * batch_size
+    batch_size: int = 8                # keep in mind real_batch_size = 2 * batch_size
     verbose: bool = True
-    gpu_ids: tuple = (0,1,2,3)           # GPU ids for training
+    gpu_ids: tuple = (0,)           # GPU ids for training
     
     # Eval
-    batch_size_eval: int = 128
+    batch_size_eval: int = 32
     eval_every_n_epoch: int = 1          # eval every n Epoch
     normalize_features: bool = True
     eval_gallery_n: int = -1             # -1 for all or int
@@ -65,7 +65,7 @@ class Configuration:
     
     # Dataset
     dataset: str = 'U1652-D2S'           # 'U1652-D2S' | 'U1652-S2D'
-    data_folder: str = "/mnt/wangyuntao/Datasets/University-Release"
+    data_folder: str = "../Datasets/University-Release"
     
     # Augment Images
     prob_flip: float = 0.5              # flipping the sat image and drone image simultaneously
@@ -80,7 +80,7 @@ class Configuration:
     checkpoint_start = None
   
     # set num_workers to 0 if on Windows
-    num_workers: int = 0 if os.name == 'nt' else 16 
+    num_workers: int = 0 if os.name == 'nt' else 12 
     
     # train on GPU if available
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu' 

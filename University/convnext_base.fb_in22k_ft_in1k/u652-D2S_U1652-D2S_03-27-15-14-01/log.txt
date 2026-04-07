@@ -1,0 +1,70 @@
+
+Model: convnext_base.fb_in22k_ft_in1k
+{'input_size': (3, 224, 224), 'interpolation': 'bicubic', 'mean': (0.485, 0.456, 0.406), 'std': (0.229, 0.224, 0.225), 'crop_pct': 0.875, 'crop_mode': 'center'}
+GPUs available: 1
+
+Image Size Sat: (384, 384)
+Image Size Ground: (384, 384)
+Mean: [0.485, 0.456, 0.406]
+Std:  [0.229, 0.224, 0.225]
+
+Query Images Test: 37855
+Gallery Images Test: 951
+
+Scheduler: cosine - max LR: 0.0005
+Warmup Epochs: 0.1 - Warmup Steps: 473.20000000000005
+Train Epochs:  3 - Train Steps:  14196
+
+Shuffle Dataset:
+Original Length: 37854 - Length after Shuffle: 37848
+Break Counter: 0
+Pairs left out of last batch to avoid creating noise: 6
+First Element ID: 1094 - Last Element ID: 1342
+
+------------------------------[Epoch: 1]------------------------------
+Epoch: 1, Train Loss = 0.562, Lr = 0.000390
+
+------------------------------[Evaluate]------------------------------
+
+Extract Features (University-1652):
+Extract Features time: 210.20s
+Compute Scores:
+Recall@1: 83.88 - Recall@5: 94.07 - Recall@10: 96.01 - mAP: 88.44
+
+Shuffle Dataset:
+Original Length: 37854 - Length after Shuffle: 37848
+Break Counter: 0
+Pairs left out of last batch to avoid creating noise: 6
+First Element ID: 0945 - Last Element ID: 0924
+
+------------------------------[Epoch: 2]------------------------------
+Epoch: 2, Train Loss = 0.491, Lr = 0.000133
+
+------------------------------[Evaluate]------------------------------
+
+Extract Features (University-1652):
+Extract Features time: 207.18s
+Compute Scores:
+Recall@1: 87.21 - Recall@5: 95.75 - Recall@10: 97.22 - mAP: 91.05
+
+Shuffle Dataset:
+Original Length: 37854 - Length after Shuffle: 37848
+Break Counter: 0
+Pairs left out of last batch to avoid creating noise: 6
+First Element ID: 1299 - Last Element ID: 0967
+
+------------------------------[Epoch: 3]------------------------------
+Epoch: 3, Train Loss = 0.477, Lr = 0.000000
+
+------------------------------[Evaluate]------------------------------
+
+Extract Features (University-1652):
+Extract Features time: 208.19s
+Compute Scores:
+Recall@1: 88.77 - Recall@5: 96.43 - Recall@10: 97.51 - mAP: 92.26
+
+Shuffle Dataset:
+Original Length: 37854 - Length after Shuffle: 37848
+Break Counter: 0
+Pairs left out of last batch to avoid creating noise: 6
+First Element ID: 1234 - Last Element ID: 1388

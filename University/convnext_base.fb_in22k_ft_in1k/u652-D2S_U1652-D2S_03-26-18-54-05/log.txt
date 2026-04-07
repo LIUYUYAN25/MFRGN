@@ -1,0 +1,21 @@
+
+Model: convnext_base.fb_in22k_ft_in1k
+{'input_size': (3, 224, 224), 'interpolation': 'bicubic', 'mean': (0.485, 0.456, 0.406), 'std': (0.229, 0.224, 0.225), 'crop_pct': 0.875, 'crop_mode': 'center'}
+GPUs available: 1
+
+Image Size Sat: (384, 384)
+Image Size Ground: (384, 384)
+Mean: [0.485, 0.456, 0.406]
+Std:  [0.229, 0.224, 0.225]
+
+Query Images Test: 0
+Gallery Images Test: 0
+
+Scheduler: cosine - max LR: 0.0005
+Warmup Epochs: 0.1 - Warmup Steps: 0.0
+Train Epochs:  3 - Train Steps:  0
+
+Shuffle Dataset:
+Original Length: 0 - Length after Shuffle: 0
+Break Counter: 0
+Pairs left out of last batch to avoid creating noise: 0

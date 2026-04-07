@@ -31,10 +31,10 @@ class Configuration:
     
     # Dataset
     dataset: str = 'U1652-S2D'           # 'U1652-D2S' | 'U1652-S2D'
-    data_folder: str = "/mnt/wangyuntao/Datasets/University-Release"
+    data_folder: str = "../Datasets/University-Release"
     
     # Checkpoint to start from
-    checkpoint_start = 'weights_U1652-S2D.pth'
+    checkpoint_start = 'pretrained/checkpoints_u1652/weights_U1652-S2D.pth'
   
     # set num_workers to 0 if on Windows
     num_workers: int = 0 if os.name == 'nt' else 8
