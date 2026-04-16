@@ -15,16 +15,14 @@ CSV 格式（自动识别，有表头）:
 """
 
 import os
-import sys
 import time
 import shutil
+import sys
 import torch
 from dataclasses import dataclass, field
 from typing import List
-from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import torchvision.utils as vutils
 from transformers import (
     get_cosine_schedule_with_warmup,
     get_polynomial_decay_schedule_with_warmup,
@@ -43,290 +41,389 @@ from model.mfrgn import TimmModel_u
 
 
 def get_parameter_number(model):
-    total     = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return {'Total': total / 1e6, 'Trainable': trainable / 1e6}
+    total_num     = sum(p.numel() for p in model.parameters())
+    trainable_num = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return {'Total': total_num / 1000000, 'Trainable': trainable_num / 1000000}
 
 
-# ══════════════════════════════════════════════════════════════════
-#  配置
-# ══════════════════════════════════════════════════════════════════
+#-----------------------------------------------------------------------------#
+# Config                                                                      #
+#-----------------------------------------------------------------------------#
 
 @dataclass
 class Configuration:
 
-    net: str = 'mfrgn_uavvisloc'
+    net: str     = 'mfrgn_uavvisloc'
+    # [新增，对齐 train_cvact.py] 训练时同步备份模型定义文件
+    net_file: str = 'model/mfrgn.py'
 
-    # ── 模型 ───────────────────────────────────────────────────────
-    model: str  = 'convnext_base.fb_in22k_ft_in1k'
+    # ── 模型 ──────────────────────────────────────────────────────────────
+    model: str   = 'convnext_base.fb_in22k_ft_in1k'
     img_size: int = 256      # 模型输入边长（正方形）
-    psm: bool = True
+    psm: bool    = True     # 是否使用 PSM 模块
 
-    # ── 数据集 ─────────────────────────────────────────────────────
+    # ── 数据集 ────────────────────────────────────────────────────────────
     data_folder: str = '../Datasets/UAV_VisLoc_dataset'
 
     # 场景划分
     train_scene_ids: List[str] = field(
-        default_factory=lambda: ['01','02','03','04','05','06','07','08']
+        default_factory=lambda: ['01', '02', '03', '04', '05', '06', '07', '08']
     )
     val_scene_ids: List[str] = field(
-        default_factory=lambda: ['09','10','11']
+        default_factory=lambda: ['09', '10', '11']
     )
 
     # 卫星 patch 裁剪尺寸（在原始卫星图分辨率下）
-    # 建议：飞行高度 ~400m 时，卫星图地面分辨率约 0.5~1m/px，
-    # 无人机拍摄覆盖约 200m×200m，对应 200~400px，
-    # 取 256 保留足够上下文。
-    sat_patch_size: int = 256
+    sat_patch_size: int = 512
 
-    # ── 训练超参 ────────────────────────────────────────────────────
+    # ── 训练超参 ──────────────────────────────────────────────────────────
     mixed_precision: bool = True
-    seed: int = 42
+    seed = 42
     epochs: int = 30
-    batch_size: int = 16
+    batch_size: int = 32
     verbose: bool = True
-    gpu_ids: tuple = (0, 1, 2, 3)
+    gpu_ids: tuple = (0,)
 
-    # ── 评估 ────────────────────────────────────────────────────────
+    # ── 评估 ──────────────────────────────────────────────────────────────
     batch_size_eval: int = 128
     eval_every_n_epoch: int = 3
     normalize_features: bool = True
 
-    # ── 优化器 ──────────────────────────────────────────────────────
-    lr: float = 0.0001
-    scheduler: str = 'cosine'
+    # ── 优化器 ────────────────────────────────────────────────────────────
+    clip_grad = 100.                    # None | float
+    decay_exclue_bias: bool = False
+    grad_checkpointing: bool = False    # Gradient Checkpointing
+
+    # ── 学习率 / 调度 ─────────────────────────────────────────────────────
+    lr: float          = 0.0001
+    scheduler: str     = 'cosine'       # "polynomial" | "cosine" | "constant" | None
     warmup_epochs: int = 1
-    lr_end: float = 0.00001
-    clip_grad: float = 100.
+    lr_end: float      = 0.00001        # only for "polynomial"
 
-    # ── 数据增广 ────────────────────────────────────────────────────
+    # ── 数据增广 ──────────────────────────────────────────────────────────
     prob_flip: float   = 0.5
-    prob_rotate: float = 0.5   # 卫星 patch 旋转（俯视图方向不重要，旋转增广合理）
+    prob_rotate: float = 0.5
 
-    # ── 损失 ────────────────────────────────────────────────────────
+    # ── 损失 ──────────────────────────────────────────────────────────────
     label_smoothing: float = 0.1
 
-    # ── 其他 ────────────────────────────────────────────────────────
-    model_path: str = 'results_uavvisloc'
-    checkpoint_start: str = None
-    zero_shot: bool = False
-    num_workers: int = 0 if os.name == 'nt' else 8
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    cudnn_benchmark: bool = False
+    # ── 其他 ──────────────────────────────────────────────────────────────
+    model_path: str   = 'results_uavvisloc'
+    zero_shot: bool   = False
+    checkpoint_start  = None
+    num_workers: int  = 0 if os.name == 'nt' else 8
+    device: str       = 'cuda' if torch.cuda.is_available() else 'cpu'
+    cudnn_benchmark: bool     = False
     cudnn_deterministic: bool = True
 
-# ══════════════════════════════════════════════════════════════════
-#  主程序
-# ══════════════════════════════════════════════════════════════════
+
+#-----------------------------------------------------------------------------#
+# Train Config                                                                #
+#-----------------------------------------------------------------------------#
 
 config = Configuration()
 
+
 if __name__ == '__main__':
 
-    save_path = os.path.join(
-        config.model_path, config.model,
-        f"{config.net}_{time.strftime('%m-%d-%H-%M-%S')}"
-    )
-    os.makedirs(save_path, exist_ok=True)
-    shutil.copyfile(os.path.basename(__file__), os.path.join(save_path, 'train.py'))
-    sys.stdout = Logger(os.path.join(save_path, 'log.txt'))
+    # [对齐其他脚本] model_path 变量名与其他三个脚本保持一致（原 save_path）
+    model_path = "{}/{}/{}_{}" .format(config.model_path,
+                                       config.model,
+                                       config.net,
+                                       time.strftime("%m-%d-%H-%M-%S"))
 
-    writer = SummaryWriter(log_dir=os.path.join(save_path, 'tensorboard'))
+    if not os.path.exists(model_path):
+        os.makedirs(model_path)
+    shutil.copyfile(os.path.basename(__file__), "{}/train.py".format(model_path))
+    # [新增，对齐 train_cvact.py] 同时备份模型定义文件
+    shutil.copyfile(config.net_file, "{}/model.py".format(model_path))
 
-    setup_system(config.seed, config.cudnn_benchmark, config.cudnn_deterministic)
+    # Redirect print to both console and log file
+    sys.stdout = Logger(os.path.join(model_path, 'log.txt'))
 
-    # ── 模型 ─────────────────────────────────────────────────────────
-    print(f"\nModel: {config.model}")
-    model = TimmModel_u(
-        model_name=config.model,
-        img_size=config.img_size,
-        psm=config.psm,
-    )
+    # [保留] TensorBoard writer（其他脚本无此项，本脚本特有）
+    writer = SummaryWriter(log_dir=os.path.join(model_path, 'tensorboard'))
+
+    setup_system(seed=config.seed,
+                 cudnn_benchmark=config.cudnn_benchmark,
+                 cudnn_deterministic=config.cudnn_deterministic)
+
+    #-----------------------------------------------------------------------------#
+    # Model                                                                       #
+    #-----------------------------------------------------------------------------#
+
+    print("\nModel: {}".format(config.model))
+
+    # [对齐 train_university.py] TimmModel_u 调用方式与 university 保持一致：
+    #   university: TimmModel_u(config.model, psm=True, img_size=config.img_size)
+    model = TimmModel_u(config.model,
+                        psm=config.psm,
+                        img_size=config.img_size)
+
+    # [新增，对齐 train_university.py] 打印模型内部数据配置（augmentation mean/std 等）
+    data_config = model.get_config()
+    print(data_config)
 
     mean = [0.485, 0.456, 0.406]
     std  = [0.229, 0.224, 0.225]
-    img_size_tuple = (config.img_size, config.img_size)
+    image_size_sat   = (config.img_size, config.img_size)
+    img_size_ground  = (config.img_size, config.img_size)
 
-    if config.checkpoint_start:
-        print(f"从 checkpoint 恢复: {config.checkpoint_start}")
-        model.load_state_dict(
-            torch.load(config.checkpoint_start), strict=False
-        )
+    # [新增，对齐其他脚本] Gradient Checkpointing 支持
+    if config.grad_checkpointing:
+        model.set_grad_checkpointing(True)
 
-    p = get_parameter_number(model)
-    print(f"Total: {p['Total']:.2f}M   Trainable: {p['Trainable']:.2f}M")
+    # Load pretrained Checkpoint
+    if config.checkpoint_start is not None:
+        print("Start from:", config.checkpoint_start)
+        model_state_dict = torch.load(config.checkpoint_start)
+        model.load_state_dict(model_state_dict, strict=False)
 
+    params = get_parameter_number(model)
+    print("Total: {} M   Trainable: {} M".format(params['Total'], params['Trainable']))
+
+    # Data parallel
+    print("GPUs available:", torch.cuda.device_count())
     if torch.cuda.device_count() > 1 and len(config.gpu_ids) > 1:
         model = torch.nn.DataParallel(model)
+
+    # Model to device
     model = model.to(config.device)
 
-    print(f"img_size: {img_size_tuple}  sat_patch_size: {config.sat_patch_size}")
-    print(f"LR: {config.lr}  batch: {config.batch_size}\n")
+    print("\nImage Size Sat:", image_size_sat)
+    print("Image Size Ground:", img_size_ground)
+    print("Mean: {}".format(mean))
+    print("Std:  {}\n".format(std))
+    print("lr: ", config.lr)
+    print("batch size: ", config.batch_size)
 
-    # ── 数据变换 ──────────────────────────────────────────────────────
-    # 无人机图和卫星 patch 都是俯视正方形，统一用正方形变换
-    sat_tr_train, drone_tr_train = get_transforms_train(
-        image_size_sat=img_size_tuple,
-        img_size_ground=img_size_tuple,
-        mean=mean, std=std,
-    )
-    sat_tr_val, drone_tr_val = get_transforms_val(
-        image_size_sat=img_size_tuple,
-        img_size_ground=img_size_tuple,
-        mean=mean, std=std,
+    #-----------------------------------------------------------------------------#
+    # DataLoader                                                                  #
+    #-----------------------------------------------------------------------------#
+
+    # Transforms
+    # 无人机图和卫星 patch 都是俯视正方形，统一使用正方形变换
+    sat_transforms_train, ground_transforms_train = get_transforms_train(
+        image_size_sat=image_size_sat,
+        img_size_ground=img_size_ground,
+        mean=mean,
+        std=std,
     )
 
-    # ── 数据集 ───────────────────────────────────────────────────────
+    sat_transforms_val, ground_transforms_val = get_transforms_val(
+        image_size_sat=image_size_sat,
+        img_size_ground=img_size_ground,
+        mean=mean,
+        std=std,
+    )
+
+    # Train
     train_dataset = UAVVisLocDatasetTrain(
         data_folder=config.data_folder,
         scene_ids=config.train_scene_ids,
-        transforms_query=drone_tr_train,
-        transforms_reference=sat_tr_train,
+        transforms_query=ground_transforms_train,
+        transforms_reference=sat_transforms_train,
         prob_flip=config.prob_flip,
         prob_rotate=config.prob_rotate,
         shuffle_batch_size=config.batch_size,
         sat_patch_size=config.sat_patch_size,
     )
-    train_loader = DataLoader(
-        train_dataset, batch_size=config.batch_size,
-        num_workers=config.num_workers, shuffle=True,
-        pin_memory=True, drop_last=True,
-    )
 
-    ref_dataset_val = UAVVisLocDatasetEval(
-        data_folder=config.data_folder, scene_ids=config.val_scene_ids,
-        img_type='reference', transforms=sat_tr_val,
+    train_dataloader = DataLoader(train_dataset,
+                                  batch_size=config.batch_size,
+                                  num_workers=config.num_workers,
+                                  shuffle=True,
+                                  pin_memory=True,
+                                  drop_last=True)
+
+    # Reference Satellite Images (Val)
+    reference_dataset_val = UAVVisLocDatasetEval(
+        data_folder=config.data_folder,
+        scene_ids=config.val_scene_ids,
+        img_type='reference',
+        transforms=sat_transforms_val,
         sat_patch_size=config.sat_patch_size,
     )
-    ref_loader_val = DataLoader(
-        ref_dataset_val, batch_size=config.batch_size_eval,
-        num_workers=config.num_workers, shuffle=False, pin_memory=True,
-    )
 
-    qry_dataset_val = UAVVisLocDatasetEval(
-        data_folder=config.data_folder, scene_ids=config.val_scene_ids,
-        img_type='query', transforms=drone_tr_val,
+    reference_dataloader_val = DataLoader(reference_dataset_val,
+                                          batch_size=config.batch_size_eval,
+                                          num_workers=config.num_workers,
+                                          shuffle=False,
+                                          pin_memory=True)
+
+    # Query Drone Images (Val)
+    query_dataset_val = UAVVisLocDatasetEval(
+        data_folder=config.data_folder,
+        scene_ids=config.val_scene_ids,
+        img_type='query',
+        transforms=ground_transforms_val,
         sat_patch_size=config.sat_patch_size,
     )
-    qry_loader_val = DataLoader(
-        qry_dataset_val, batch_size=config.batch_size_eval,
-        num_workers=config.num_workers, shuffle=False, pin_memory=True,
-    )
 
-    print(f"训练样本: {len(train_dataset)}")
-    print(f"验证 Reference: {len(ref_dataset_val)}  Query: {len(qry_dataset_val)}")
+    query_dataloader_val = DataLoader(query_dataset_val,
+                                      batch_size=config.batch_size_eval,
+                                      num_workers=config.num_workers,
+                                      shuffle=False,
+                                      pin_memory=True)
 
-    # ── 损失 / 优化器 / 调度 ─────────────────────────────────────────
-    loss_function = InfoNCE(
-        torch.nn.CrossEntropyLoss(label_smoothing=config.label_smoothing),
-        device=config.device
-    )
-    scaler    = GradScaler(init_scale=2.**10) if config.mixed_precision else None
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    print("Train Images:", len(train_dataset))
+    print("Reference Images Val:", len(reference_dataset_val))
+    print("Query Images Val:", len(query_dataset_val))
 
-    total_steps  = len(train_loader) * config.epochs
-    warmup_steps = len(train_loader) * config.warmup_epochs
+    #-----------------------------------------------------------------------------#
+    # Loss                                                                        #
+    #-----------------------------------------------------------------------------#
 
-    if config.scheduler == 'cosine':
-        scheduler = get_cosine_schedule_with_warmup(
-            optimizer, total_steps, warmup_steps)
-    elif config.scheduler == 'polynomial':
-        scheduler = get_polynomial_decay_schedule_with_warmup(
-            optimizer, total_steps, config.lr_end, 1.5, warmup_steps)
+    # [对齐其他脚本] 先构造 loss_fn 再传入 InfoNCE，风格与 cvact/cvusa/university 一致
+    loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
+    loss_function = InfoNCE(loss_function=loss_fn,
+                            device=config.device)
+
+    # [修改] torch.cuda.amp.GradScaler 已在 PyTorch >= 2.0 中弃用
+    # 改用新 API: torch.amp.GradScaler(device=...) 
+    # 其他三个脚本迁移方式（供参考）:
+    #   旧: scaler = GradScaler(init_scale=2.**10)
+    #   新: scaler = torch.amp.GradScaler(device='cuda', init_scale=2.**10)
+    if config.mixed_precision:
+        scaler = torch.amp.GradScaler(device=config.device, init_scale=2.**10)
     else:
-        scheduler = get_constant_schedule_with_warmup(optimizer, warmup_steps)
+        scaler = None
 
-    print(f"Scheduler: {config.scheduler}  "
-          f"Warmup: {warmup_steps}步  Total: {total_steps}步")
+    #-----------------------------------------------------------------------------#
+    # Optimizer                                                                   #
+    #-----------------------------------------------------------------------------#
 
-    # ── Zero-shot 评估 ────────────────────────────────────────────────
+    # [新增，对齐其他脚本] 增加 decay_exclue_bias 分组权重衰减，与 cvact/cvusa/university 结构对齐
+    if config.decay_exclue_bias:
+        param_optimizer = list(model.named_parameters())
+        no_decay = ["bias", "LayerNorm.bias"]
+        optimizer_parameters = [
+            {
+                "params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+                "weight_decay": 0.01,
+            },
+            {
+                "params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer = torch.optim.AdamW(optimizer_parameters, lr=config.lr)
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+
+    #-----------------------------------------------------------------------------#
+    # Scheduler                                                                   #
+    #-----------------------------------------------------------------------------#
+
+    # [对齐其他脚本] 变量名从 total_steps 改为 train_steps，与其他三个脚本一致
+    train_steps  = len(train_dataloader) * config.epochs
+    warmup_steps = len(train_dataloader) * config.warmup_epochs
+
+    if config.scheduler == "polynomial":
+        print("\nScheduler: polynomial - max LR: {} - end LR: {}".format(config.lr, config.lr_end))
+        scheduler = get_polynomial_decay_schedule_with_warmup(optimizer,
+                                                              num_training_steps=train_steps,
+                                                              lr_end=config.lr_end,
+                                                              power=1.5,
+                                                              num_warmup_steps=warmup_steps)
+
+    elif config.scheduler == "cosine":
+        print("\nScheduler: cosine - max LR: {}".format(config.lr))
+        scheduler = get_cosine_schedule_with_warmup(optimizer,
+                                                    num_training_steps=train_steps,
+                                                    num_warmup_steps=warmup_steps)
+
+    elif config.scheduler == "constant":
+        print("\nScheduler: constant - max LR: {}".format(config.lr))
+        scheduler = get_constant_schedule_with_warmup(optimizer,
+                                                      num_warmup_steps=warmup_steps)
+    else:
+        scheduler = None
+
+    # [对齐其他脚本] 打印 Warmup/Train 步数信息
+    print("Warmup Epochs: {} - Warmup Steps: {}".format(str(config.warmup_epochs).ljust(2), warmup_steps))
+    print("Train Epochs:  {} - Train Steps:  {}".format(config.epochs, train_steps))
+
+    #-----------------------------------------------------------------------------#
+    # Zero Shot                                                                   #
+    #-----------------------------------------------------------------------------#
     if config.zero_shot:
-        print(f"\n{'─'*30}[Zero Shot]{'─'*30}")
-        evaluate(config=config, model=model,
-                 reference_dataloader=ref_loader_val,
-                 query_dataloader=qry_loader_val,
-                 ranks=[1,5,10], step_size=1000,
-                 is_dual=True, is_autocast=True, cleanup=True)
+        print("\n{}[{}]{}".format(30*"-", "Zero Shot", 30*"-"))
 
-    # ── 训练 ─────────────────────────────────────────────────────────
-    best_score = 0.0
+        r1_test = evaluate(config=config,
+                           model=model,
+                           reference_dataloader=reference_dataloader_val,
+                           query_dataloader=query_dataloader_val,
+                           ranks=[1, 5, 10],
+                           step_size=1000,
+                           is_dual=False,
+                           cleanup=True)
+
+    #-----------------------------------------------------------------------------#
+    # Train                                                                       #
+    #-----------------------------------------------------------------------------#
+    best_score = 0
 
     for epoch in range(1, config.epochs + 1):
-        print(f"\n{'─'*30}[Epoch {epoch}/{config.epochs}]{'─'*30}")
-        t0 = time.time()
 
-        train_loss = train(
-            train_config=config, model=model,
-            dataloader=train_loader, loss_function=loss_function,
-            optimizer=optimizer, scheduler=scheduler, scaler=scaler,
-        )
-        print(f"Loss={train_loss:.4f}  "
-              f"LR={optimizer.param_groups[0]['lr']:.2e}  "
-              f"Time={(time.time()-t0)/60:.1f}min")
-        
-        # ==================== 新增：记录到 TensorBoard ====================
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
+        # [对齐其他脚本] 打印格式统一使用 30*"-" + .format()，原代码使用 unicode "─" 字符
+        print("\n{}[Epoch: {}/{}]{}".format(30*"-", epoch, config.epochs, 30*"-"))
+        s2 = time.time()
 
-        # 可视化一个 batch 的图像（每 3 个 epoch 一次，避免文件太大）
-        if epoch % 3 == 0 or epoch == 1:
-            try:
-                query, reference, labels = next(iter(train_loader))
-                query = query[:8].cpu()      # 只取前 8 对
-                reference = reference[:8].cpu()
+        train_loss = train(config,
+                           model,
+                           dataloader=train_dataloader,
+                           loss_function=loss_function,
+                           optimizer=optimizer,
+                           scheduler=scheduler,
+                           scaler=scaler)
 
-                # 反归一化（因为做了 Normalize）
-                mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-                std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-                query_vis = query * std + mean
-                ref_vis   = reference * std + mean
+        # [对齐其他脚本] 打印格式统一使用 .format()
+        print("Epoch: {}, Train Loss = {:.3f}, Lr = {:.6e}".format(epoch,
+                                                                    train_loss,
+                                                                    optimizer.param_groups[0]['lr']))
 
-                # 拼成网格图
-                grid_query = vutils.make_grid(query_vis, nrow=4, normalize=True, scale_each=True)
-                grid_ref   = vutils.make_grid(ref_vis, nrow=4, normalize=True, scale_each=True)
+        s3 = time.time()
+        print('train: ', (s3 - s2) / 60, 'min')
 
-                writer.add_image('Train/Batch_Query_Drone', grid_query, epoch)
-                writer.add_image('Train/Batch_Reference_Satellite', grid_ref, epoch)
-            except:
-                pass   # 如果 dataloader 有问题也不崩溃
+        # Evaluate
+        # [对齐 train_university.py] 条件与 university 一致：每 n 轮或最后一轮都评估
+        if (epoch % config.eval_every_n_epoch == 0 and epoch != 0) or epoch == config.epochs:
 
-        # 评估时记录指标
-        if epoch % config.eval_every_n_epoch == 0 or epoch == config.epochs:
-            print(f"\n{'─'*30}[Evaluate]{'─'*30}")
-            r1 = evaluate(...)   # 你原来的评估
+            print("\n{}[{}]{}".format(30*"-", "Evaluate", 30*"-"))
 
-            writer.add_scalar('Recall/R@1', r1, epoch)
-            # 如果 evaluate 函数能返回 r5, r10，也可以加上：
-            # writer.add_scalar('Recall/R@5', r5, epoch)
-            # writer.add_scalar('Recall/R@10', r10, epoch)
+            r1_test = evaluate(config=config,
+                               model=model,
+                               reference_dataloader=reference_dataloader_val,
+                               query_dataloader=query_dataloader_val,
+                               ranks=[1, 5, 10],
+                               step_size=1000,
+                               is_dual=True,
+                               is_autocast=True,
+                               cleanup=True)
 
-            # 保存最佳模型时也可以记录
-            if r1 > best_score:
-                writer.add_text('Best_Model', f"Epoch {epoch} - New best R@1: {r1:.4f}", epoch)
+            # [保留] TensorBoard 记录 Recall@1（其他脚本无此项，本脚本特有）
+            writer.add_scalar('Eval/Recall@1', r1_test, epoch)
 
-        if epoch % config.eval_every_n_epoch == 0 or epoch == config.epochs:
-            print(f"\n{'─'*30}[Evaluate]{'─'*30}")
-            r1 = evaluate(
-                config=config, model=model,
-                reference_dataloader=ref_loader_val,
-                query_dataloader=qry_loader_val,
-                ranks=[1,5,10], step_size=1000,
-                is_dual=True, is_autocast=True, cleanup=True,
-            )
-            state = (model.module.state_dict()
-                     if hasattr(model, 'module') else model.state_dict())
-            if r1 > best_score:
-                best_score = r1
-                torch.save(state,
-                           os.path.join(save_path, f'weights_e{epoch}_{r1:.4f}.pth'))
-                print(f"  ★ 新最佳 Recall@1: {best_score:.4f}")
+            if r1_test > best_score:
+                best_score = r1_test
 
-    writer.close()   # 加在整个训练循环结束后
-    print(f"TensorBoard 日志已保存，可用以下命令查看：")
-    print(f"tensorboard --logdir {save_path}")
-    
-    state = (model.module.state_dict()
-             if hasattr(model, 'module') else model.state_dict())
-    torch.save(state, os.path.join(save_path, 'weights_end.pth'))
-    print(f"\n训练完成。最佳 Recall@1: {best_score:.4f}")
-    print(f"权重保存: {save_path}")
+                # [对齐其他脚本] 显式判断 DataParallel 再保存，与其他三个脚本完全一致
+                # （原代码用 hasattr(model, 'module') 判断，改为与其他脚本相同的方式）
+                if torch.cuda.device_count() > 1 and len(config.gpu_ids) > 1:
+                    torch.save(model.module.state_dict(),
+                               '{}/weights_e{}_{:.4f}.pth'.format(model_path, epoch, r1_test))
+                else:
+                    torch.save(model.state_dict(),
+                               '{}/weights_e{}_{:.4f}.pth'.format(model_path, epoch, r1_test))
+
+    # Save final weights
+    # [对齐其他脚本] 最终权重保存逻辑与其他三个脚本完全对齐
+    if torch.cuda.device_count() > 1 and len(config.gpu_ids) > 1:
+        torch.save(model.module.state_dict(), '{}/weights_end.pth'.format(model_path))
+    else:
+        torch.save(model.state_dict(), '{}/weights_end.pth'.format(model_path))
+
+    print("\nTraining finished. Best Recall@1: {:.4f}".format(best_score))
+    print("Weights saved to: {}".format(model_path))
+    writer.close()

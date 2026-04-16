@@ -64,7 +64,9 @@ def get_transforms_train(image_size_sat,
 
     ground_transforms = A.Compose([Cut(cutting=ground_cutting, p=1.0),
                                    A.ImageCompression(quality_lower=90, quality_upper=100, p=0.5),
-                                   A.Resize(img_size_ground[0], img_size_ground[1], interpolation=cv2.INTER_AREA, p=1.0),
+                                #    A.Resize(img_size_ground[0], img_size_ground[1], interpolation=cv2.INTER_AREA, p=1.0),
+                                A.LongestMaxSize(max_size=img_size_ground[0], interpolation=cv2.INTER_AREA, p=1.0),
+                                A.PadIfNeeded(min_height=img_size_ground[0], min_width=img_size_ground[1], border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
                                    A.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15, hue=0.15, always_apply=False, p=0.5),
                                    A.OneOf([
                                             A.AdvancedBlur(p=1.0),

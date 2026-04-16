@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import math
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
@@ -32,37 +33,60 @@ import rasterio
 from rasterio.windows import Window
 from rasterio.transform import rowcol as geo_rowcol
 from pyproj import Transformer
+
 cv2.setNumThreads(0)
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  场景元数据（只存坐标信息，不存图像数据）
+#  正北对齐函数
+# ═══════════════════════════════════════════════════════════════════
+def rotate_uav_image_to_north(image: np.ndarray, phi: float) -> np.ndarray:
+    """
+    先中心裁剪，再旋转，最后截取内切正方形消除黑边，保持物理比例不失真。
+    """
+    if pd.isna(phi):
+        return image
+    
+    # angle = 90.0 - float(phi)
+    angle = -float(phi)  # 直接使用负的 phi 进行旋转，使得无人机图像正北对齐(进一步检查！！！)
+    h, w = image.shape[:2]
+    
+    # 1. 以最短边为基准，先进行中心裁剪成正方形
+    min_side = min(h, w)
+    cx, cy = w // 2, h // 2
+    cropped = image[cy - min_side//2 : cy + min_side//2, cx - min_side//2 : cx + min_side//2]
+    
+    # 2. 旋转
+    M = cv2.getRotationMatrix2D((min_side//2, min_side//2), angle, 1.0)
+    rotated = cv2.warpAffine(cropped, M, (min_side, min_side))
+    
+    # 3. 裁剪内切正方形以去除旋转产生的黑角，根据旋转角动态计算
+    rad = abs(math.radians(angle % 90))
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    # 最大内切正方形边长公式（针对正方形输入）
+    safe_side = int(min_side / (cos_a + sin_a)) if (cos_a + sin_a) > 1e-6 else min_side
+    safe_side = min(safe_side, min_side)          # 不能超过原边长
+    center = min_side // 2
+    final_img = rotated[center - safe_side//2 : center + safe_side//2,
+                        center - safe_side//2 : center + safe_side//2]
+                        
+    return final_img
+
+# ═══════════════════════════════════════════════════════════════════
+#  场景元数据与窗口读取
 # ═══════════════════════════════════════════════════════════════════
 
 class SceneMeta:
-    """
-    存储单个场景的坐标变换信息，不加载图像数据。
-
-    属性:
-        tif_paths  : 有序的 tif 文件路径列表（单文件或多分块）
-        tile_grid  : 分块布局 {(row,col): tif_path}，单文件时 {(1,1): path}
-        tile_shapes: 每块的 (H, W)，用于拼合时计算偏移
-        total_H/W  : 拼合后的总高度和宽度
-        transform  : 仿射变换矩阵（左上角块的）
-        crs_epsg   : 卫星图坐标系的 EPSG 编号
-        _proj      : pyproj.Transformer（WGS84 → 卫星图 CRS）
-    """
-
     def __init__(self, scene_dir: str):
         self.scene_dir = scene_dir
-        tif_files = sorted(f for f in os.listdir(scene_dir)
-                           if f.lower().endswith('.tif'))
+        tif_files = sorted(f for f in os.listdir(scene_dir) if f.lower().endswith('.tif'))
         if not tif_files:
             raise FileNotFoundError(f"{scene_dir} 中没有 .tif 文件")
 
         self.tile_grid: dict  = {}
-        self.tile_shapes: dict = {}   # (row,col) -> (H, W)
-        self.tile_offsets: dict = {}  # (row,col) -> (row_offset, col_offset) 在拼合图中的起始像素
+        self.tile_shapes: dict = {}   
+        self.tile_offsets: dict = {}  
 
         if len(tif_files) == 1:
             path = os.path.join(scene_dir, tif_files[0])
@@ -79,7 +103,6 @@ class SceneMeta:
         self._build_proj()
 
     def _parse_tiles(self, scene_dir: str, tif_files: list):
-        """解析多分块 TIF，命名格式: satelliteNN_RR-CC.tif"""
         parsed = []
         for fname in tif_files:
             stem  = Path(fname).stem
@@ -88,7 +111,6 @@ class SceneMeta:
                 r_s, c_s = parts[1].split('-')
                 parsed.append((int(r_s), int(c_s), os.path.join(scene_dir, fname)))
             else:
-                # 无法解析，回退为单文件
                 path = os.path.join(scene_dir, tif_files[0])
                 self.tile_grid = {(1, 1): path}
                 with rasterio.open(path) as ds:
@@ -110,14 +132,8 @@ class SceneMeta:
                     self.transform = ds.transform
                     self.crs_epsg  = ds.crs.to_epsg() if ds.crs else 4326
 
-        # 计算每块在拼合图中的像素偏移
-        row_heights = {}
-        for r in range(1, max_row + 1):
-            row_heights[r] = self.tile_shapes[(r, 1)][0]
-
-        col_widths = {}
-        for c in range(1, max_col + 1):
-            col_widths[c] = self.tile_shapes[(1, c)][1]
+        row_heights = {r: self.tile_shapes[(r, 1)][0] for r in range(1, max_row + 1)}
+        col_widths = {c: self.tile_shapes[(1, c)][1] for c in range(1, max_col + 1)}
 
         cum_row = 0
         for r in range(1, max_row + 1):
@@ -131,57 +147,24 @@ class SceneMeta:
         self.total_W = sum(col_widths.values())
 
     def _build_proj(self):
-        """构建 WGS84(lat/lon) → 卫星图 CRS 的转换器。"""
         self._proj = None
         try:
             if self.crs_epsg != 4326:
-                # always_xy=False: 输入 (lat, lon)，输出 (easting, northing)
-                self._proj = Transformer.from_crs(
-                    4326, self.crs_epsg, always_xy=False
-                )
+                self._proj = Transformer.from_crs(4326, self.crs_epsg, always_xy=False)
         except Exception as e:
             print(f"[警告] 坐标转换器构建失败 (epsg={self.crs_epsg}): {e}")
 
     def gps_to_pixel(self, lat: float, lon: float):
-        """
-        WGS84(lat, lon) → 拼合卫星图上的 (x_pixel, y_pixel)。
-        x_pixel = 列索引（width 方向，东西方向）
-        y_pixel = 行索引（height 方向，南北方向）
-        """
         if self._proj is not None:
             east, north = self._proj.transform(lat, lon)
             rows, cols = geo_rowcol(self.transform, xs=east, ys=north)
         else:
-            # CRS 已是 WGS84: x=lon（东）, y=lat（北）
             rows, cols = geo_rowcol(self.transform, xs=lon, ys=lat)
-        return int(cols), int(rows)   # (x_pixel, y_pixel)
+        return int(cols), int(rows)
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  窗口读取函数（核心：不加载整图）
-# ═══════════════════════════════════════════════════════════════════
-
-def read_patch_windowed(scene_meta: SceneMeta,
-                        x_pixel: int,
-                        y_pixel: int,
-                        patch_size: int) -> np.ndarray:
-    """
-    从磁盘按窗口读取以 (x_pixel, y_pixel) 为中心的 patch_size×patch_size 区域。
-    超出卫星图边界部分补零（黑色填充）。
-
-    参数
-    ----
-    scene_meta : SceneMeta 对象（只含坐标元数据，不含图像数据）
-    x_pixel    : 中心列坐标（0 = 左边）
-    y_pixel    : 中心行坐标（0 = 上边）
-    patch_size : 裁剪边长
-
-    返回
-    ----
-    patch : (patch_size, patch_size, 3) uint8 RGB ndarray
-    """
-    half   = patch_size // 2
-    # patch 在拼合图中的绝对像素范围
+def read_patch_windowed(scene_meta: SceneMeta, x_pixel: int, y_pixel: int, patch_size: int) -> np.ndarray:
+    half = patch_size // 2
     abs_x1 = x_pixel - half
     abs_y1 = y_pixel - half
     abs_x2 = abs_x1 + patch_size
@@ -189,65 +172,46 @@ def read_patch_windowed(scene_meta: SceneMeta,
 
     patch = np.zeros((patch_size, patch_size, 3), dtype=np.uint8)
 
-    # 遍历每个分块 tile，找出与 patch 有重叠的部分
     for (tile_r, tile_c), tif_path in scene_meta.tile_grid.items():
         tile_row_off, tile_col_off = scene_meta.tile_offsets[(tile_r, tile_c)]
         tile_H, tile_W = scene_meta.tile_shapes[(tile_r, tile_c)]
 
-        # tile 在拼合图中的绝对范围
         tile_x1 = tile_col_off
         tile_y1 = tile_row_off
         tile_x2 = tile_col_off + tile_W
         tile_y2 = tile_row_off + tile_H
 
-        # 计算重叠区域（在拼合图坐标系下）
         overlap_x1 = max(abs_x1, tile_x1)
         overlap_y1 = max(abs_y1, tile_y1)
         overlap_x2 = min(abs_x2, tile_x2)
         overlap_y2 = min(abs_y2, tile_y2)
 
         if overlap_x1 >= overlap_x2 or overlap_y1 >= overlap_y2:
-            continue   # 无重叠，跳过
+            continue
 
-        # 重叠区在 tile 内的本地坐标
         local_x1 = overlap_x1 - tile_x1
         local_y1 = overlap_y1 - tile_y1
         local_x2 = overlap_x2 - tile_x1
         local_y2 = overlap_y2 - tile_y1
 
-        # 重叠区在 patch 内的坐标
         patch_x1 = overlap_x1 - abs_x1
         patch_y1 = overlap_y1 - abs_y1
-        patch_x2 = overlap_x2 - abs_x1
-        patch_y2 = overlap_y2 - abs_y1
 
-        # 用 rasterio Window 读取对应区域
-        window = Window(
-            col_off=local_x1,
-            row_off=local_y1,
-            width=local_x2 - local_x1,
-            height=local_y2 - local_y1,
-        )
+        window = Window(col_off=local_x1, row_off=local_y1, width=local_x2 - local_x1, height=local_y2 - local_y1)
         try:
             with rasterio.open(tif_path) as ds:
-                data = ds.read(window=window)   # (bands, H_window, W_window)
-        except Exception as e:
-            print(f"[警告] 窗口读取失败 {tif_path}: {e}")
+                data = ds.read(window=window)
+        except Exception:
             continue
 
-        # 转为 RGB uint8 (H, W, 3)
         rgb = _bands_to_rgb(data)
-
-        h_read = rgb.shape[0]
-        w_read = rgb.shape[1]
-        patch[patch_y1: patch_y1 + h_read,
-              patch_x1: patch_x1 + w_read] = rgb
+        h_read, w_read = rgb.shape[0], rgb.shape[1]
+        patch[patch_y1: patch_y1 + h_read, patch_x1: patch_x1 + w_read] = rgb
 
     return patch
 
 
 def _bands_to_rgb(arr: np.ndarray) -> np.ndarray:
-    """(bands, H, W) → (H, W, 3) RGB uint8"""
     if arr.ndim == 2:
         arr = arr[np.newaxis, ...]
     if arr.shape[0] == 1:
@@ -255,8 +219,7 @@ def _bands_to_rgb(arr: np.ndarray) -> np.ndarray:
     elif arr.shape[0] > 3:
         arr = arr[:3]
 
-    img = np.transpose(arr[:3], (1, 2, 0))   # (H, W, 3)
-
+    img = np.transpose(arr[:3], (1, 2, 0))
     if img.dtype != np.uint8:
         mn, mx = img.min(), img.max()
         if mx > mn:
@@ -266,26 +229,15 @@ def _bands_to_rgb(arr: np.ndarray) -> np.ndarray:
     return img
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  CSV 解析 + GPS → 像素坐标
-# ═══════════════════════════════════════════════════════════════════
-
-def load_scene_samples(data_folder: str,
-                       scene_id: str,
-                       meta: SceneMeta,
-                       label_offset: int = 0):
+def load_scene_samples(data_folder: str, scene_id: str, meta: SceneMeta, label_offset: int = 0):
     """
-    解析场景 CSV，将 lat/lon 转换为像素坐标。
-
-    返回: (samples, n_valid)
-      samples = [(drone_path, scene_id, x_pixel, y_pixel, label), ...]
+    解析场景 CSV，增加了对 Phi (航向角) 的提取
     """
     scene_dir = os.path.join(data_folder, scene_id)
     drone_dir = os.path.join(scene_dir, 'drone')
     csv_path  = os.path.join(scene_dir, f'{scene_id}.csv')
 
     if not os.path.exists(csv_path):
-        print(f"[警告] CSV 不存在: {csv_path}")
         return [], 0
 
     df = pd.read_csv(csv_path)
@@ -293,12 +245,15 @@ def load_scene_samples(data_folder: str,
 
     samples = []
     n_skip  = 0
-    margin  = 512   # 允许轻微超界（crop 时填零），完全在外才丢弃
+    margin  = 512
 
     for _, row in df.iterrows():
         filename = str(row['filename']).strip()
         lat = float(row['lat'])
         lon = float(row['lon'])
+        
+        # 提取航向角 Phi1
+        phi = float(row['phi1']) if 'phi1' in row else 0.0
 
         drone_path = os.path.join(drone_dir, filename)
         if not os.path.exists(drone_path):
@@ -307,207 +262,183 @@ def load_scene_samples(data_folder: str,
 
         try:
             x_pixel, y_pixel = meta.gps_to_pixel(lat, lon)
-        except Exception as e:
-            print(f"[警告] 坐标转换失败 {filename}: {e}")
+        except Exception:
             n_skip += 1
             continue
 
-        # 完全超界才丢弃
         if (x_pixel < -margin or x_pixel >= meta.total_W + margin or
                 y_pixel < -margin or y_pixel >= meta.total_H + margin):
             n_skip += 1
             continue
-
-        samples.append(
-            (drone_path, scene_id, x_pixel, y_pixel, label_offset + len(samples))
-        )
-
-    if n_skip:
-        print(f"    跳过 {n_skip} 个无效/越界样本")
+            
+        # 返回元组增加 phi 字段
+        samples.append((drone_path, scene_id, x_pixel, y_pixel, label_offset + len(samples), phi))
 
     return samples, len(samples)
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  训练集
+#  训练集 (结构与 MFRGN cvact.py 严格对齐)
 # ═══════════════════════════════════════════════════════════════════
 
 class UAVVisLocDatasetTrain(Dataset):
-    """
-    UAV-VisLoc 训练集。
-
-    采用窗口读取策略，__getitem__ 时才从磁盘读取 patch，
-    不预加载整张卫星图，内存占用极低。
-
-    参数
-    ----
-    data_folder          : UAV_VisLoc_dataset 根目录
-    scene_ids            : 训练场景 id 列表，e.g. ['01','02',...,'08']
-    transforms_query     : 无人机图变换（albumentations，含 Normalize+ToTensor）
-    transforms_reference : 卫星 patch 变换
-    prob_flip            : 水平翻转概率（query+reference 同步）
-    prob_rotate          : 卫星 patch 随机旋转 90/180/270 度的概率
-    shuffle_batch_size   : shuffle() 的 batch 大小
-    sat_patch_size       : 卫星 patch 边长（原始卫星图像素单位）
-                           transforms 里的 Resize 会将其缩放至 img_size
-    """
-
+    
     def __init__(self,
                  data_folder: str,
                  scene_ids: list,
                  transforms_query=None,
                  transforms_reference=None,
-                 prob_flip: float = 0.5,
-                 prob_rotate: float = 0.5,
-                 shuffle_batch_size: int = 128,
-                 sat_patch_size: int = 512):
+                 prob_flip=0.0,
+                 prob_rotate=0.0,
+                 shuffle_batch_size=128,
+                 sat_patch_size=512):
         super().__init__()
         self.data_folder          = data_folder
-        self.transforms_query     = transforms_query
-        self.transforms_reference = transforms_reference
+        self.transforms_query     = transforms_query           # ground/drone
+        self.transforms_reference = transforms_reference       # satellite
         self.prob_flip            = prob_flip
         self.prob_rotate          = prob_rotate
         self.shuffle_batch_size   = shuffle_batch_size
         self.sat_patch_size       = sat_patch_size
 
-        # 只存元数据，不存图像
-        self.scene_metas: dict = {}
-        self.all_samples: list = []
+        self.scene_metas = {}
+        self.all_samples_info = [] # 存储完整的 (drone_path, scene_id, x, y, label, phi)
+        
+        train_ids_list = []
         label_offset = 0
 
         for scene_id in scene_ids:
             scene_dir = os.path.join(data_folder, scene_id)
-            if not os.path.isdir(scene_dir):
-                print(f"[警告] 场景目录不存在: {scene_dir}，跳过")
-                continue
+            if not os.path.isdir(scene_dir): continue
 
-            print(f"  读取元数据: 场景 {scene_id} ...")
             meta = SceneMeta(scene_dir)
             self.scene_metas[scene_id] = meta
-            print(f"    卫星图大小: {meta.total_W}×{meta.total_H}  "
-                  f"CRS EPSG: {meta.crs_epsg}")
 
-            samples, n = load_scene_samples(
-                data_folder, scene_id, meta, label_offset
-            )
-            self.all_samples.extend(samples)
+            samples, n = load_scene_samples(data_folder, scene_id, meta, label_offset)
+            
+            # 对齐 MFRGN 的 id 管理机制
+            for s in samples:
+                idx = len(self.all_samples_info)
+                self.all_samples_info.append(s)
+                train_ids_list.append(idx)
+                
             label_offset += n
-            print(f"    有效样本: {n}")
 
-        self.train_ids    = list(range(len(self.all_samples)))
-        self.current_idxs = copy.deepcopy(self.train_ids)
-        print(f"\nUAVVisLocDatasetTrain 总计: {len(self.all_samples)} 个训练样本")
-        print("（卫星图采用窗口读取，不占用大块内存）\n")
-
-    def __len__(self):
-        return len(self.current_idxs)
+        self.train_ids = train_ids_list
+        self.samples = copy.deepcopy(self.train_ids) # 对应原版的 current_idxs
 
     def __getitem__(self, index):
-        drone_path, scene_id, x_pixel, y_pixel, label = \
-            self.all_samples[self.current_idxs[index]]
+        idnum = self.samples[index]
+        drone_path, scene_id, x_pixel, y_pixel, label, phi = self.all_samples_info[idnum]
 
-        # ── 无人机图（从磁盘读取） ──────────────────────────────────
+        # ── 1. load query -> ground(drone) image ──
         query_img = cv2.imread(drone_path)
         if query_img is None:
             query_img = np.zeros((256, 256, 3), dtype=np.uint8)
         else:
             query_img = cv2.cvtColor(query_img, cv2.COLOR_BGR2RGB)
+            query_img = rotate_uav_image_to_north(query_img, phi)  # 【正北对齐】
 
-        # ── 卫星 patch（窗口读取，只读这一块） ──────────────────────
-        reference_img = read_patch_windowed(
-            self.scene_metas[scene_id], x_pixel, y_pixel, self.sat_patch_size
-        )
+        # ── 2. load reference -> satellite image ──
+        reference_img = read_patch_windowed(self.scene_metas[scene_id], x_pixel, y_pixel, self.sat_patch_size)
 
-        # ── 同步数据增广 ─────────────────────────────────────────────
+        # ── 3. Flip simultaneously query and reference ──
         if np.random.random() < self.prob_flip:
-            query_img     = cv2.flip(query_img, 1)
+            query_img = cv2.flip(query_img, 1)
             reference_img = cv2.flip(reference_img, 1)
 
-        if np.random.random() < self.prob_rotate:
-            k = np.random.choice([1, 2, 3])
-            reference_img = np.rot90(reference_img, k).copy()
-
-        # ── 变换（Resize + Normalize + ToTensor） ───────────────────
+        # ── 4. image transforms ──
         if self.transforms_query is not None:
             query_img = self.transforms_query(image=query_img)['image']
+            
         if self.transforms_reference is not None:
             reference_img = self.transforms_reference(image=reference_img)['image']
 
-        return query_img, reference_img, torch.tensor(label, dtype=torch.long)
+        # ── 5. Rotate simultaneously query and reference ──
+        if np.random.random() < self.prob_rotate:
+            r = np.random.choice([1, 2, 3])
+            # 注意：无人机和卫星都是俯视图，两边都使用 rot90 (与全景图的 roll 不同)
+            reference_img = torch.rot90(reference_img, k=r, dims=(1, 2))
+            query_img = torch.rot90(query_img, k=r, dims=(1, 2))
+                   
+        label = torch.tensor(label, dtype=torch.long)  
+        return query_img, reference_img, label
+
+    def __len__(self):
+        return len(self.samples)
 
     def shuffle(self, sim_dict=None, neighbour_select=64, neighbour_range=128):
-        """随机 shuffle，保证每个 batch 内样本不重复。"""
+        """MFRGN Style Shuffle"""
         print("\nShuffle Dataset:")
-        idx_pool        = copy.deepcopy(self.train_ids)
+        idx_pool = copy.deepcopy(self.train_ids)
         neighbour_split = neighbour_select // 2
+        
+        if sim_dict is not None:
+            similarity_pool = copy.deepcopy(sim_dict)
+            
         random.shuffle(idx_pool)
-
-        idx_epoch     = set()
-        idx_batch     = set()
-        batches       = []
+        
+        idx_epoch = set()   
+        idx_batch = set()
+        batches = []
         current_batch = []
         break_counter = 0
-
+        
         pbar = tqdm()
         while True:
             pbar.update()
-            if not idx_pool:
-                break
-
-            idx = idx_pool.pop(0)
-            if (idx not in idx_batch and idx not in idx_epoch
-                    and len(current_batch) < self.shuffle_batch_size):
-                idx_batch.add(idx)
-                current_batch.append(idx)
-                idx_epoch.add(idx)
-                break_counter = 0
-
-                if sim_dict is not None and \
-                        len(current_batch) < self.shuffle_batch_size:
-                    near = copy.deepcopy(sim_dict.get(idx, [])[:neighbour_range])
-                    near_a = near[:neighbour_split]
-                    near_b = near[neighbour_split:]
-                    random.shuffle(near_b)
-                    for ni in near_a + near_b[:neighbour_split]:
-                        if len(current_batch) >= self.shuffle_batch_size:
-                            break
-                        if ni not in idx_batch and ni not in idx_epoch:
-                            idx_batch.add(ni)
-                            current_batch.append(ni)
-                            idx_epoch.add(ni)
+            if len(idx_pool) > 0:
+                idx = idx_pool.pop(0)
+                if idx not in idx_batch and idx not in idx_epoch and len(current_batch) < self.shuffle_batch_size:
+                    idx_batch.add(idx)
+                    current_batch.append(idx)
+                    idx_epoch.add(idx)
+                    break_counter = 0
+                    
+                    if sim_dict is not None and len(current_batch) < self.shuffle_batch_size:
+                        near_similarity = similarity_pool[idx][:neighbour_range]
+                        near_neighbours = copy.deepcopy(near_similarity[:neighbour_split])
+                        far_neighbours = copy.deepcopy(near_similarity[neighbour_split:])
+                        random.shuffle(far_neighbours)
+                        far_neighbours = far_neighbours[:neighbour_split]
+                        near_similarity_select = near_neighbours + far_neighbours
+                        
+                        for idx_near in near_similarity_select:
+                            if len(current_batch) >= self.shuffle_batch_size:
+                                break
+                            if idx_near not in idx_batch and idx_near not in idx_epoch:
+                                idx_batch.add(idx_near)
+                                current_batch.append(idx_near)
+                                idx_epoch.add(idx_near)
+                                similarity_pool[idx].remove(idx_near)
+                                break_counter = 0
+                else:
+                    if idx not in idx_epoch:
+                        idx_pool.append(idx)
+                    break_counter += 1
+                    
+                if break_counter >= 1024:
+                    break
             else:
-                if idx not in idx_epoch:
-                    idx_pool.append(idx)
-                break_counter += 1
-
-            if break_counter >= 1024:
                 break
 
             if len(current_batch) >= self.shuffle_batch_size:
                 batches.extend(current_batch)
-                idx_batch     = set()
+                idx_batch = set()
                 current_batch = []
 
         pbar.close()
         time.sleep(0.3)
-        self.current_idxs = batches
-        print(f"原始: {len(self.train_ids)} → Shuffle 后: {len(self.current_idxs)}")
+        self.samples = batches
+        print("Original Length: {} - Length after Shuffle: {}".format(len(self.train_ids), len(self.samples))) 
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  评估集
+#  评估集 (结构与 MFRGN cvact.py 严格对齐)
 # ═══════════════════════════════════════════════════════════════════
 
 class UAVVisLocDatasetEval(Dataset):
-    """
-    UAV-VisLoc 评估集。同样采用窗口读取，不预加载卫星图。
-
-    img_type='query'     → 无人机图
-    img_type='reference' → 对应卫星 patch
-
-    相同 index 的 query 和 reference 互为正对（label 相同）。
-    """
-
+    
     def __init__(self,
                  data_folder: str,
                  scene_ids: list,
@@ -522,9 +453,9 @@ class UAVVisLocDatasetEval(Dataset):
         self.transforms     = transforms
         self.sat_patch_size = sat_patch_size
 
-        self.scene_metas: dict = {}
-        self._items: list      = []
-        self.labels: list      = []
+        self.scene_metas = {}
+        self._items      = []
+        self.labels      = []
         label_offset = 0
 
         for scene_id in scene_ids:
@@ -532,19 +463,19 @@ class UAVVisLocDatasetEval(Dataset):
             if not os.path.isdir(scene_dir):
                 continue
 
-            print(f"  读取元数据: 场景 {scene_id} ...")
             meta = SceneMeta(scene_dir)
             self.scene_metas[scene_id] = meta
 
-            samples, n = load_scene_samples(
-                data_folder, scene_id, meta, label_offset
-            )
-            for drone_path, s_id, x_pixel, y_pixel, lbl in samples:
+            samples, n = load_scene_samples(data_folder, scene_id, meta, label_offset)
+            
+            # 分离 Query 和 Reference 存入 _items
+            for drone_path, s_id, x_pixel, y_pixel, lbl, phi in samples:
                 if img_type == 'query':
-                    self._items.append(drone_path)
+                    self._items.append((drone_path, phi)) # Eval 也需要存 phi 以便旋转
                 else:
                     self._items.append((s_id, x_pixel, y_pixel))
                 self.labels.append(lbl)
+                
             label_offset += n
 
         print(f"UAVVisLocDatasetEval [{img_type}]: {len(self._items)} 个样本")
@@ -554,18 +485,20 @@ class UAVVisLocDatasetEval(Dataset):
 
     def __getitem__(self, index):
         if self.img_type == 'query':
-            img = cv2.imread(self._items[index])
+            drone_path, phi = self._items[index]
+            img = cv2.imread(drone_path)
             if img is None:
                 img = np.zeros((256, 256, 3), dtype=np.uint8)
             else:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img = rotate_uav_image_to_north(img, phi) # 【正北对齐】
         else:
             scene_id, x_pixel, y_pixel = self._items[index]
-            img = read_patch_windowed(
-                self.scene_metas[scene_id], x_pixel, y_pixel, self.sat_patch_size
-            )
+            img = read_patch_windowed(self.scene_metas[scene_id], x_pixel, y_pixel, self.sat_patch_size)
 
+        # image transforms
         if self.transforms is not None:
             img = self.transforms(image=img)['image']
 
-        return img, torch.tensor(self.labels[index], dtype=torch.long)
+        label = torch.tensor(self.labels[index], dtype=torch.long)
+        return img, label
