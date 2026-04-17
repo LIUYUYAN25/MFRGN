@@ -35,7 +35,7 @@ from model.mfrgn import TimmModel_u
 # ====================== 配置（请修改这里） ======================
 class Config:
     # 模型权重路径（训练完后会生成在 results_uavvisloc/xxx/weights_end.pth）
-    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-16-18-41-38/weights_end.pth'
+    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-17-18-24-51/weights_end.pth'
     
     data_folder = "../Datasets/UAV_VisLoc_dataset"   # ←←← 改成你的数据集路径
     test_scene_ids = ['09', '10', '11']              # 测试场景

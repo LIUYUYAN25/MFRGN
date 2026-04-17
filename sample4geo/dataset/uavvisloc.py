@@ -234,7 +234,7 @@ def load_scene_samples(data_folder: str, scene_id: str, meta: SceneMeta, label_o
     解析场景 CSV，增加了对 Phi (航向角) 的提取
     """
     scene_dir = os.path.join(data_folder, scene_id)
-    drone_dir = os.path.join(scene_dir, 'drone')
+    drone_dir = os.path.join(scene_dir, 'drone_IR')
     csv_path  = os.path.join(scene_dir, f'{scene_id}.csv')
 
     if not os.path.exists(csv_path):
