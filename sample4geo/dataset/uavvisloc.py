@@ -272,7 +272,7 @@ def load_scene_samples(data_folder: str, scene_id: str, meta: SceneMeta, label_o
             continue
             
         # 返回元组增加 phi 字段
-        samples.append((drone_path, scene_id, x_pixel, y_pixel, label_offset + len(samples), phi))
+        samples.append((drone_path, scene_id, x_pixel, y_pixel, lat, lon, label_offset + len(samples), phi))
 
     return samples, len(samples)
 
@@ -329,7 +329,7 @@ class UAVVisLocDatasetTrain(Dataset):
 
     def __getitem__(self, index):
         idnum = self.samples[index]
-        drone_path, scene_id, x_pixel, y_pixel, label, phi = self.all_samples_info[idnum]
+        drone_path, scene_id, x_pixel, y_pixel, lat, lon, label, phi = self.all_samples_info[idnum]
 
         # ── 1. load query -> ground(drone) image ──
         query_img = cv2.imread(drone_path)
@@ -456,6 +456,9 @@ class UAVVisLocDatasetEval(Dataset):
         self.scene_metas = {}
         self._items      = []
         self.labels      = []
+        self.query_gps   = [] if img_type == 'query' else None
+        self.query_scene_id = [] if img_type == 'query' else None
+        self.ref_gps     = [] if img_type == 'reference' else None
         label_offset = 0
 
         for scene_id in scene_ids:
@@ -469,11 +472,14 @@ class UAVVisLocDatasetEval(Dataset):
             samples, n = load_scene_samples(data_folder, scene_id, meta, label_offset)
             
             # 分离 Query 和 Reference 存入 _items
-            for drone_path, s_id, x_pixel, y_pixel, lbl, phi in samples:
+            for drone_path, s_id, x_pixel, y_pixel, lat, lon, lbl, phi in samples:
                 if img_type == 'query':
                     self._items.append((drone_path, phi)) # Eval 也需要存 phi 以便旋转
+                    self.query_gps.append((lat, lon))
+                    self.query_scene_id.append(scene_id)
                 else:
                     self._items.append((s_id, x_pixel, y_pixel))
+                    self.ref_gps.append((lat, lon))
                 self.labels.append(lbl)
                 
             label_offset += n
