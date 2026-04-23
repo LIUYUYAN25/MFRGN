@@ -332,11 +332,10 @@ class UAVVisLocDatasetTrain(Dataset):
         drone_path, scene_id, x_pixel, y_pixel, lat, lon, label, phi = self.all_samples_info[idnum]
 
         # ── 1. load query -> ground(drone) image ──
-        query_img = cv2.imread(drone_path)
+        query_img = cv2.imread(drone_path, cv2.IMREAD_GRAYSCALE)
         if query_img is None:
-            query_img = np.zeros((256, 256, 3), dtype=np.uint8)
+            query_img = np.zeros((256, 256, 1), dtype=np.uint8)
         else:
-            query_img = cv2.cvtColor(query_img, cv2.COLOR_BGR2RGB)
             query_img = rotate_uav_image_to_north(query_img, phi)  # 【正北对齐】
 
         # ── 2. load reference -> satellite image ──
@@ -492,12 +491,11 @@ class UAVVisLocDatasetEval(Dataset):
     def __getitem__(self, index):
         if self.img_type == 'query':
             drone_path, phi = self._items[index]
-            img = cv2.imread(drone_path)
+            img = cv2.imread(drone_path, cv2.IMREAD_GRAYSCALE)
             if img is None:
-                img = np.zeros((256, 256, 3), dtype=np.uint8)
+                img = np.zeros((256, 256, 1), dtype=np.uint8)
             else:
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img = rotate_uav_image_to_north(img, phi) # 【正北对齐】
+                img = rotate_uav_image_to_north(img, phi)  # 【正北对齐】
         else:
             scene_id, x_pixel, y_pixel = self._items[index]
             img = read_patch_windowed(self.scene_metas[scene_id], x_pixel, y_pixel, self.sat_patch_size)

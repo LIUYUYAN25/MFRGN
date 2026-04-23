@@ -299,8 +299,24 @@ class TimmModel(nn.Module):
         self.embed_sat = BackboneEmbed(self.d_model, self.backbone_sat.strides, self.backbone_sat.num_channels, return_interm_layers=not self.single_features)
 
         # 2. 无人机流 (IR) Backbone 和 Embed
-        self.backbone_grd = IRBackbone(self.backbone_name, self.ir_checkpoint, return_interm_layers=not self.single_features, in_channels=3)
+        self.backbone_grd = IRBackbone(self.backbone_name, self.ir_checkpoint, return_interm_layers=not self.single_features, in_channels=1)
         self.embed_grd = BackboneEmbed(self.d_model, self.backbone_grd.strides, self.backbone_grd.num_channels, return_interm_layers=not self.single_features)
+
+        # ================================================================= #
+        # [新增核心逻辑]：部分权重共享 (Partial Parameter Sharing)
+        # 解耦 stem 和 stages[0]，强行让 grd 的深层 stages 指向 sat 的深层 stages
+        # ================================================================= #
+        if 'convnext' in self.backbone_name.lower():
+            self.backbone_grd.backbone.stages[1] = self.backbone_sat.backbone.stages[1]
+            self.backbone_grd.backbone.stages[2] = self.backbone_sat.backbone.stages[2]
+            self.backbone_grd.backbone.stages[3] = self.backbone_sat.backbone.stages[3]
+            
+        elif 'resnet' in self.backbone_name.lower():
+            # 备用：如果你以后切换回 resnet，对应的共享逻辑是高层的 layer
+            self.backbone_grd.backbone.layer2 = self.backbone_sat.backbone.layer2
+            self.backbone_grd.backbone.layer3 = self.backbone_sat.backbone.layer3
+            self.backbone_grd.backbone.layer4 = self.backbone_sat.backbone.layer4
+        # ================================================================= #
 
         #----------------------- global -----------------------# 
         # multi-scale self-cross attention for sat

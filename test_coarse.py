@@ -30,12 +30,12 @@ from rasterio.windows import Window
 # ====================== 你的项目导入 ======================
 from sample4geo.dataset.uavvisloc import UAVVisLocDatasetEval, _bands_to_rgb
 from sample4geo.transforms import get_transforms_val
-from model.mfrgn import TimmModel_u
+from model.mfrgn_ir import TimmModel, TimmModel_u
 
 # ====================== 配置（请修改这里） ======================
 class Config:
     # 模型权重路径（训练完后会生成在 results_uavvisloc/xxx/weights_end.pth）
-    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-17-18-24-51/weights_end.pth'
+    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-23-16-43-07/weights_end.pth'
     
     data_folder = "../Datasets/UAV_VisLoc_dataset"   # ←←← 改成你的数据集路径
     test_scene_ids = ['09', '10', '11']              # 测试场景
@@ -44,6 +44,12 @@ class Config:
     sat_patch_size = 512                             # 必须和训练时一致
     batch_size = 128
     top_k = 5                                        # 显示前几个最匹配的粗范围
+
+    model: str   = 'convnext_base.fb_in22k_ft_in1k'
+    is_polar: bool = False
+    image_size_sat = (img_size, img_size)
+    img_size_ground = (img_size, img_size)
+    psm: bool    = True
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     save_dir = "coarse_test_results"
@@ -61,9 +67,11 @@ os.makedirs(config.save_dir, exist_ok=True)
 
 # ====================== 加载模型 ======================
 print("加载模型...")
-model = TimmModel_u('convnext_base.fb_in22k_ft_in1k', 
-                    psm=True, 
-                    img_size=config.img_size)
+model = TimmModel(config.model,
+                    config.image_size_sat,
+                    config.img_size_ground,
+                    psm=config.psm,
+                    is_polar=config.is_polar)
 
 checkpoint = torch.load(config.weight_path, map_location=config.device)
 model.load_state_dict(checkpoint, strict=False)
@@ -77,8 +85,8 @@ mean = [0.485, 0.456, 0.406]
 std = [0.229, 0.224, 0.225]
 
 sat_transforms_val, ground_transforms_val = get_transforms_val(
-    image_size_sat=(config.img_size, config.img_size),
-    img_size_ground=(config.img_size, config.img_size),
+    image_size_sat=config.image_size_sat,
+    img_size_ground=config.img_size_ground,
     mean=mean,
     std=std,
 )
@@ -108,7 +116,7 @@ ref_gps_list = []   # 每个 patch 对应的 (lat, lon)
 with torch.no_grad():
     for batch_idx, (imgs, labels) in enumerate(tqdm(reference_loader, desc="提取卫星特征")):
         imgs = imgs.to(config.device)
-        feats = model(imgs)                     # 模型输出特征
+        feats = model(imgs, input_id=2)                     # 模型输出特征
         feats = F.normalize(feats, p=2, dim=1)  # L2 归一化，便于余弦相似度
         
         ref_features.append(feats.cpu())
@@ -143,7 +151,7 @@ for q_idx in config.query_indices:
     query_tensor = query_tensor.unsqueeze(0).to(config.device)  # 添加 batch 维度
     
     with torch.no_grad():
-        query_feat = model(query_tensor)
+        query_feat = model(query_tensor, input_id=1)
         query_feat = F.normalize(query_feat, p=2, dim=1)
     
     # 计算余弦相似度

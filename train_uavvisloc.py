@@ -75,7 +75,7 @@ class Configuration:
 
     is_polar: bool = False
     image_size_sat = (img_size, img_size)
-    img_size_ground = (img_size, img_size*2)
+    img_size_ground = (img_size, img_size)
     # 卫星 patch 裁剪尺寸（在原始卫星图分辨率下）
     sat_patch_size: int = 512
 
