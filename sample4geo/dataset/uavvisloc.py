@@ -354,12 +354,12 @@ class UAVVisLocDatasetTrain(Dataset):
         if self.transforms_reference is not None:
             reference_img = self.transforms_reference(image=reference_img)['image']
 
-        # ── 5. Rotate simultaneously query and reference ──
-        if np.random.random() < self.prob_rotate:
-            r = np.random.choice([1, 2, 3])
-            # 注意：无人机和卫星都是俯视图，两边都使用 rot90 (与全景图的 roll 不同)
-            reference_img = torch.rot90(reference_img, k=r, dims=(1, 2))
-            query_img = torch.rot90(query_img, k=r, dims=(1, 2))
+        # # ── 5. Rotate simultaneously query and reference ──
+        # if np.random.random() < self.prob_rotate:
+        #     r = np.random.choice([1, 2, 3])
+        #     # 注意：无人机和卫星都是俯视图，两边都使用 rot90 (与全景图的 roll 不同)
+        #     reference_img = torch.rot90(reference_img, k=r, dims=(1, 2))
+        #     query_img = torch.rot90(query_img, k=r, dims=(1, 2))
                    
         label = torch.tensor(label, dtype=torch.long)  
         return query_img, reference_img, label

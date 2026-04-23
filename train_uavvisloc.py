@@ -37,7 +37,7 @@ from sample4geo.utils import setup_system, Logger
 from sample4geo.trainer import train
 from sample4geo.evaluate.cvusa_and_cvact import evaluate
 from sample4geo.loss import InfoNCE
-from model.mfrgn import TimmModel_u
+from model.mfrgn_ir import TimmModel, TimmModel_u
 
 
 def get_parameter_number(model):
@@ -73,14 +73,17 @@ class Configuration:
         default_factory=lambda: ['09', '10', '11']
     )
 
+    is_polar: bool = False
+    image_size_sat = (img_size, img_size)
+    img_size_ground = (img_size, img_size*2)
     # 卫星 patch 裁剪尺寸（在原始卫星图分辨率下）
     sat_patch_size: int = 512
 
     # ── 训练超参 ──────────────────────────────────────────────────────────
     mixed_precision: bool = True
     seed = 42
-    epochs: int = 30
-    batch_size: int = 32
+    epochs: int  = 300
+    batch_size: int = 16
     verbose: bool = True
     gpu_ids: tuple = (0,)
 
@@ -156,9 +159,11 @@ if __name__ == '__main__':
 
     # [对齐 train_university.py] TimmModel_u 调用方式与 university 保持一致：
     #   university: TimmModel_u(config.model, psm=True, img_size=config.img_size)
-    model = TimmModel_u(config.model,
-                        psm=config.psm,
-                        img_size=config.img_size)
+    model = TimmModel(config.model,
+                      config.image_size_sat,
+                      config.img_size_ground,
+                      psm=config.psm,
+                      is_polar=config.is_polar)
 
     # [新增，对齐 train_university.py] 打印模型内部数据配置（augmentation mean/std 等）
     data_config = model.get_config()
@@ -166,8 +171,8 @@ if __name__ == '__main__':
 
     mean = [0.485, 0.456, 0.406]
     std  = [0.229, 0.224, 0.225]
-    image_size_sat   = (config.img_size, config.img_size)
-    img_size_ground  = (config.img_size, config.img_size)
+    image_size_sat   = config.image_size_sat
+    img_size_ground  = config.img_size_ground
 
     # [新增，对齐其他脚本] Gradient Checkpointing 支持
     if config.grad_checkpointing:
@@ -356,7 +361,7 @@ if __name__ == '__main__':
                            query_dataloader=query_dataloader_val,
                            ranks=[1, 5, 10],
                            step_size=1000,
-                           is_dual=False,
+                           is_dual=True,
                            cleanup=True)
 
     #-----------------------------------------------------------------------------#
