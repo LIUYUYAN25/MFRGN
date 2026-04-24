@@ -37,7 +37,7 @@ from sample4geo.transforms import get_transforms_train, get_transforms_val
 from sample4geo.utils import setup_system, Logger
 from sample4geo.trainer import train
 from sample4geo.evaluate.cvusa_and_cvact import evaluate
-from sample4geo.loss import InfoNCE, InfoNCEMargin
+from sample4geo.loss import InfoNCE, InfoNCEMargin, InfoNCEWithEdge
 from model.mfrgn_ir import TimmModel, TimmModel_u
 
 
@@ -296,8 +296,11 @@ if __name__ == '__main__':
 
     # [对齐其他脚本] 先构造 loss_fn 再传入 InfoNCE，风格与 cvact/cvusa/university 一致
     loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
-    loss_function = InfoNCEMargin(loss_function=loss_fn,
-                            device=config.device)
+    # loss_function = InfoNCEMargin(loss_function=loss_fn, device=config.device)
+    loss_function = InfoNCEWithEdge(loss_function=loss_fn, 
+                                margin=0.1, 
+                                edge_weight=0.1, 
+                                device=config.device)
 
     # [修改] torch.cuda.amp.GradScaler 已在 PyTorch >= 2.0 中弃用
     # 改用新 API: torch.amp.GradScaler(device=...) 

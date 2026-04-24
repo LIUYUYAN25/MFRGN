@@ -37,7 +37,7 @@ def train(train_config, model, dataloader, loss_function, optimizer, scheduler=N
                 reference = reference.to(train_config.device)
                 features1, features2 = model(query, reference)
                 if torch.cuda.device_count() > 1 and len(train_config.gpu_ids) > 1: 
-                    loss = loss_function(features1, features2, model.module.logit_scale.exp())
+                    loss = loss_function(features1, features2, model.module.logit_scale.exp(), raw_img1=query, raw_img2=reference)
                 else:
                     loss = loss_function(features1, features2, model.logit_scale.exp()) 
                 losses.update(loss.item())
