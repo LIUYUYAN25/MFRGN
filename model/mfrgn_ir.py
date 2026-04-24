@@ -40,6 +40,17 @@ ConvNext model name
 
 """
 
+"""
+
+Swin Transformer model name
+{
+    'swin_tiny_224': 'swin_tiny_patch4_window7_224',
+    'swin_small_224': 'swin_small_patch4_window7_224',
+    ''swin_base_224': 'swin_base_patch4_window7_224',
+}}
+
+"""
+
 
 class Backbone(nn.Module):
     def __init__(self, model_name, bk_checkpoint, return_interm_layers: bool):
@@ -159,8 +170,60 @@ class IRBackbone(nn.Module):
                 self.strides = [32]
                 self.num_channels = [1024]
 
+        elif 'swin' in self.name.lower():
+            # Swin Transformer 默认有 4 个 stage (stride: 4, 8, 16, 32)
+            # 根据 MFRGN 的要求，我们需要后 3 个 stage (对应 stride 8, 16, 32)
+            out_indices = (1, 2, 3) if return_interm_layers else (3,)
+            
+            self.backbone = timm.create_model(
+                self.name, 
+                pretrained=False,           # 强制设为 False，避免在线下载
+                num_classes=0, 
+                in_chans=self.in_channels,  # 红外通常传入 1
+                features_only=True,         # 自动抽取中间层特征图
+                out_indices=out_indices
+            )
+            self.data_config = timm.data.resolve_model_data_config(self.backbone)
+
+            # --- 离线加载权重及单通道(1-channel)自适应 ---
+            if ir_checkpoint:
+                state_dict = torch.load(ir_checkpoint, map_location='cpu')
+                # 兼容不同格式的权重字典
+                if 'model' in state_dict:
+                    state_dict = state_dict['model']
+                elif 'state_dict' in state_dict:
+                    state_dict = state_dict['state_dict']
+
+                # 如果红外是单通道，需要对预训练的 RGB 3通道权重进行合并
+                if self.in_channels != 3:
+                    for k in list(state_dict.keys()):
+                        # Swin 的输入卷积层名为 patch_embed.proj
+                        if 'patch_embed.proj.weight' in k:
+                            weight = state_dict[k]
+                            # [out_channels, in_channels(3), kernel_size, kernel_size]
+                            if weight.shape[1] == 3:
+                                # 在通道维度上求和，保持能量分布一致
+                                state_dict[k] = weight.sum(dim=1, keepdim=True)
+                                # print(f"====> Swin 权重自适应: {k} (3通道 -> 1通道)")
+
+                self.backbone.load_state_dict(state_dict, strict=False)
+                # print(f"====> 成功加载红外流 Swin 离线权重: {ir_checkpoint}")
+
+            # --- 定义下采样率和通道数 ---
+            if return_interm_layers:
+                self.strides = [8, 16, 32]
+                if 'base' in self.name.lower():
+                    self.num_channels = [256, 512, 1024]
+                elif 'tiny' in self.name.lower():
+                    self.num_channels = [192, 384, 768]
+            else:
+                self.strides = [32]
+                if 'base' in self.name.lower():
+                    self.num_channels = [1024]
+                elif 'tiny' in self.name.lower():
+                    self.num_channels = [768]
         else:
-            raise RuntimeError(f'error model_name [resnet* or convnext]')
+            raise RuntimeError(f'error model_name')
 
     def forward(self, x):
         if 'resnet' in self.name.lower():
@@ -175,8 +238,14 @@ class IRBackbone(nn.Module):
             x2 = self.backbone.stages[2](x1)
             x3 = self.backbone.stages[3](x2)
             # print(x.shape, x0.shape, x1.shape, x2.shape, x3.shape)
-
             out = [x1, x2, x3]
+        elif 'swin' in self.name.lower():
+            raw_out = self.backbone(x)
+            out = []
+            for feat in raw_out:
+                # 维度转换: [B, H, W, C] -> [B, C, H, W]
+                feat = feat.permute(0, 3, 1, 2).contiguous()
+                out.append(feat)
         return out
 
 
@@ -241,7 +310,8 @@ def weights_init_kaiming(m):
             nn.init.constant_(m.bias, 0.0)
 
 class TimmModel(nn.Module):
-    def __init__(self, model_name,
+    def __init__(self, sat_model_name,
+                       grd_model_name,
                        sat_size,
                        grd_size,
                        psm=True,
@@ -250,7 +320,8 @@ class TimmModel(nn.Module):
         super(TimmModel, self).__init__()
         
         self.is_polar = is_polar
-        self.backbone_name = model_name
+        self.sat_backbone_name = sat_model_name
+        self.grd_backbone_name = grd_model_name
 
         self.d_model = 128
         self.nheads = 4
@@ -267,23 +338,51 @@ class TimmModel(nn.Module):
         
         self.sample = psm
 
-        if 'tiny' in self.backbone_name:
-            if 'v2' in self.backbone_name:
-                self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnextv2_tiny_22k_224_ema.pt'
+        if 'convnext' in self.sat_backbone_name.lower():
+            if 'tiny' in self.sat_backbone_name:
+                if 'v2' in self.sat_backbone_name:
+                    self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnextv2_tiny_22k_224_ema.pt'
+                else:
+                    self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_tiny_22k_1k_224.pth' 
+            elif 'base' in self.sat_backbone_name:
+                if 'v2' in self.sat_backbone_name:
+                    self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnextv2_base_22k_224_ema.pt'
+                else:
+                    self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_base_22k_1k_224.pth'
             else:
-               self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_tiny_22k_1k_224.pth' 
-        elif 'base' in self.backbone_name:
-            if 'v2' in self.backbone_name:
-                self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnextv2_base_22k_224_ema.pt'
+                self.bk_checkpoint = None
+        elif 'swin' in self.sat_backbone_name.lower():
+            if 'base' in self.sat_backbone_name:
+                self.bk_checkpoint = 'pretrained/MFRGN-pretained/swin_base_patch4_window7_224.pth'
+            elif 'small' in self.sat_backbone_name:
+                self.bk_checkpoint = 'pretrained/MFRGN-pretained/swin_small_patch4_window7_224.pth'
+            elif 'swin' in self.sat_backbone_name:
+                self.bk_checkpoint = 'pretrained/MFRGN-pretained/swin_tiny_patch4_window7_224.pth'
             else:
-                self.bk_checkpoint = 'pretrained/MFRGN-pretained/convnext_base_22k_1k_224.pth'
-        else:
-            self.bk_checkpoint = None
+                self.bk_checkpoint = None
 
-        if '384' in self.backbone_name:
-            self.bk_checkpoint = self.bk_checkpoint.replace('224', '384')
-        
-        self.ir_checkpoint = self.bk_checkpoint
+        if 'convnext' in self.grd_backbone_name.lower():
+            if 'tiny' in self.grd_backbone_name:
+                if 'v2' in self.grd_backbone_name:
+                    self.ir_checkpoint = 'pretrained/MFRGN-pretained/convnextv2_tiny_22k_224_ema.pt'
+                else:
+                    self.ir_checkpoint = 'pretrained/MFRGN-pretained/convnext_tiny_22k_1k_224.pth' 
+            elif 'base' in self.grd_backbone_name:
+                if 'v2' in self.grd_backbone_name:
+                    self.ir_checkpoint = 'pretrained/MFRGN-pretained/convnextv2_base_22k_224_ema.pt'
+                else:
+                    self.ir_checkpoint = 'pretrained/MFRGN-pretained/convnext_base_22k_1k_224.pth'
+            else:
+                self.ir_checkpoint = None
+        if 'swin' in self.grd_backbone_name.lower():
+            if 'base' in self.grd_backbone_name:
+                self.ir_checkpoint = 'pretrained/MFRGN-pretained/swin_base_patch4_window7_224.pth'
+            elif 'small' in self.grd_backbone_name:
+                self.ir_checkpoint = 'pretrained/MFRGN-pretained/swin_small_patch4_window7_224.pth'
+            elif 'swin' in self.grd_backbone_name:
+                self.ir_checkpoint = 'pretrained/MFRGN-pretained/swin_tiny_patch4_window7_224.pth'
+            else:
+                self.ir_checkpoint = None
 
 
         if self.sample:
@@ -295,27 +394,27 @@ class TimmModel(nn.Module):
 
         #----------------------- global -----------------------# 
         # 1. 卫星流 (RGB) Backbone 和 Embed
-        self.backbone_sat = Backbone(self.backbone_name, self.bk_checkpoint, return_interm_layers=not self.single_features)
+        self.backbone_sat = Backbone(self.sat_backbone_name, self.bk_checkpoint, return_interm_layers=not self.single_features)
         self.embed_sat = BackboneEmbed(self.d_model, self.backbone_sat.strides, self.backbone_sat.num_channels, return_interm_layers=not self.single_features)
 
         # 2. 无人机流 (IR) Backbone 和 Embed
-        self.backbone_grd = IRBackbone(self.backbone_name, self.ir_checkpoint, return_interm_layers=not self.single_features, in_channels=1)
+        self.backbone_grd = IRBackbone(self.grd_backbone_name, self.ir_checkpoint, return_interm_layers=not self.single_features, in_channels=1)
         self.embed_grd = BackboneEmbed(self.d_model, self.backbone_grd.strides, self.backbone_grd.num_channels, return_interm_layers=not self.single_features)
 
         # ================================================================= #
         # [新增核心逻辑]：部分权重共享 (Partial Parameter Sharing)
         # 解耦 stem 和 stages[0]，强行让 grd 的深层 stages 指向 sat 的深层 stages
         # ================================================================= #
-        if 'convnext' in self.backbone_name.lower():
-            self.backbone_grd.backbone.stages[1] = self.backbone_sat.backbone.stages[1]
-            self.backbone_grd.backbone.stages[2] = self.backbone_sat.backbone.stages[2]
-            self.backbone_grd.backbone.stages[3] = self.backbone_sat.backbone.stages[3]
+        # if 'convnext' in self.backbone_name.lower():
+        #     self.backbone_grd.backbone.stages[1] = self.backbone_sat.backbone.stages[1]
+        #     self.backbone_grd.backbone.stages[2] = self.backbone_sat.backbone.stages[2]
+        #     self.backbone_grd.backbone.stages[3] = self.backbone_sat.backbone.stages[3]
             
-        elif 'resnet' in self.backbone_name.lower():
-            # 备用：如果你以后切换回 resnet，对应的共享逻辑是高层的 layer
-            self.backbone_grd.backbone.layer2 = self.backbone_sat.backbone.layer2
-            self.backbone_grd.backbone.layer3 = self.backbone_sat.backbone.layer3
-            self.backbone_grd.backbone.layer4 = self.backbone_sat.backbone.layer4
+        # elif 'resnet' in self.backbone_name.lower():
+        #     # 备用：如果你以后切换回 resnet，对应的共享逻辑是高层的 layer
+        #     self.backbone_grd.backbone.layer2 = self.backbone_sat.backbone.layer2
+        #     self.backbone_grd.backbone.layer3 = self.backbone_sat.backbone.layer3
+        #     self.backbone_grd.backbone.layer4 = self.backbone_sat.backbone.layer4
         # ================================================================= #
 
         #----------------------- global -----------------------# 
@@ -333,12 +432,12 @@ class TimmModel(nn.Module):
 
         
         out_dim_g = 14
-        self.feat_dim_sat, self.H_sat, self.W_sat = self._dim(self.backbone_name, self.backbone_sat.strides, img_size=self.sat_size)
+        self.feat_dim_sat, self.H_sat, self.W_sat = self._dim(self.sat_backbone_name, self.backbone_sat.strides, img_size=self.sat_size)
         in_dim_sat = sum(self.feat_dim_sat[1:]) +  self.in_dim_L if self.sample else sum(self.feat_dim_sat)
         self.proj_sat = nn.Linear(in_dim_sat, out_dim_g)
 
 
-        self.feat_dim_grd, self.H_grd, self.W_grd = self._dim(self.backbone_name, self.backbone_grd.strides, img_size=self.grd_size)
+        self.feat_dim_grd, self.H_grd, self.W_grd = self._dim(self.grd_backbone_name, self.backbone_grd.strides, img_size=self.grd_size)
         in_dim_grd = sum(self.feat_dim_grd[1:]) +  self.in_dim_L if self.sample else sum(self.feat_dim_grd)
         self.proj_grd = nn.Linear(in_dim_grd, out_dim_g)
 
@@ -604,6 +703,10 @@ class TimmModel(nn.Module):
                 W = [math.floor(img_size[1] / r) for r in strides]
                 feat_dim = [H[i] * W[i] for i in range(len(H))]
         elif 'resnet' in model_name.lower():
+                H = [math.ceil(img_size[0] / r) for r in strides]
+                W = [math.ceil(img_size[1] / r) for r in strides]
+                feat_dim = [H[i] * W[i] for i in range(len(H))]
+        elif 'swin' in model_name.lower():
                 H = [math.ceil(img_size[0] / r) for r in strides]
                 W = [math.ceil(img_size[1] / r) for r in strides]
                 feat_dim = [H[i] * W[i] for i in range(len(H))]

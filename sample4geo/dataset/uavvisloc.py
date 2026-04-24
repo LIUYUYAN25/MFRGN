@@ -334,7 +334,7 @@ class UAVVisLocDatasetTrain(Dataset):
         # ── 1. load query -> ground(drone) image ──
         query_img = cv2.imread(drone_path, cv2.IMREAD_GRAYSCALE)
         if query_img is None:
-            query_img = np.zeros((256, 256, 1), dtype=np.uint8)
+            query_img = np.zeros((224, 224, 1), dtype=np.uint8)
         else:
             query_img = rotate_uav_image_to_north(query_img, phi)  # 【正北对齐】
 
@@ -353,12 +353,12 @@ class UAVVisLocDatasetTrain(Dataset):
         if self.transforms_reference is not None:
             reference_img = self.transforms_reference(image=reference_img)['image']
 
-        # # ── 5. Rotate simultaneously query and reference ──
-        # if np.random.random() < self.prob_rotate:
-        #     r = np.random.choice([1, 2, 3])
-        #     # 注意：无人机和卫星都是俯视图，两边都使用 rot90 (与全景图的 roll 不同)
-        #     reference_img = torch.rot90(reference_img, k=r, dims=(1, 2))
-        #     query_img = torch.rot90(query_img, k=r, dims=(1, 2))
+        # ── 5. Rotate simultaneously query and reference ──
+        if np.random.random() < self.prob_rotate:
+            r = np.random.choice([1, 2, 3])
+            # 注意：无人机和卫星都是俯视图，两边都使用 rot90 (与全景图的 roll 不同)
+            reference_img = torch.rot90(reference_img, k=r, dims=(1, 2))
+            query_img = torch.rot90(query_img, k=r, dims=(1, 2))
                    
         label = torch.tensor(label, dtype=torch.long)  
         return query_img, reference_img, label
@@ -493,7 +493,7 @@ class UAVVisLocDatasetEval(Dataset):
             drone_path, phi = self._items[index]
             img = cv2.imread(drone_path, cv2.IMREAD_GRAYSCALE)
             if img is None:
-                img = np.zeros((256, 256, 1), dtype=np.uint8)
+                img = np.zeros((224, 224, 1), dtype=np.uint8)
             else:
                 img = rotate_uav_image_to_north(img, phi)  # 【正北对齐】
         else:

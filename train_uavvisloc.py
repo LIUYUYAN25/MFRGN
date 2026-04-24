@@ -58,7 +58,8 @@ class Configuration:
     net_file: str = 'model/mfrgn.py'
 
     # ── 模型 ──────────────────────────────────────────────────────────────
-    model: str   = 'convnext_base.fb_in22k_ft_in1k'
+    sat_model_name: str   = 'convnext_base.fb_in22k_ft_in1k'
+    grd_model_name: str   = 'convnext_base.fb_in22k_ft_in1k'
     img_size: int = 256      # 模型输入边长（正方形）
     psm: bool    = True     # 是否使用 PSM 模块
 
@@ -82,7 +83,7 @@ class Configuration:
     # ── 训练超参 ──────────────────────────────────────────────────────────
     mixed_precision: bool = True
     seed = 42
-    epochs: int  = 300
+    epochs: int  = 15
     batch_size: int = 16
     verbose: bool = True
     gpu_ids: tuple = (0,)
@@ -130,8 +131,9 @@ config = Configuration()
 if __name__ == '__main__':
 
     # [对齐其他脚本] model_path 变量名与其他三个脚本保持一致（原 save_path）
-    model_path = "{}/{}/{}_{}" .format(config.model_path,
-                                       config.model,
+    model_path = "{}/{}_{}/{}_{}" .format(config.model_path,
+                                       config.sat_model_name,
+                                       config.grd_model_name,
                                        config.net,
                                        time.strftime("%m-%d-%H-%M-%S"))
 
@@ -155,11 +157,13 @@ if __name__ == '__main__':
     # Model                                                                       #
     #-----------------------------------------------------------------------------#
 
-    print("\nModel: {}".format(config.model))
+    print("\nsat_Model: {}".format(config.sat_model_name))
+    print("\ngrd_Model: {}".format(config.grd_model_name))
 
     # [对齐 train_university.py] TimmModel_u 调用方式与 university 保持一致：
     #   university: TimmModel_u(config.model, psm=True, img_size=config.img_size)
-    model = TimmModel(config.model,
+    model = TimmModel(config.sat_model_name,
+                      config.grd_model_name,
                       config.image_size_sat,
                       config.img_size_ground,
                       psm=config.psm,

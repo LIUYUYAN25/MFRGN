@@ -35,7 +35,7 @@ from model.mfrgn_ir import TimmModel, TimmModel_u
 # ====================== 配置（请修改这里） ======================
 class Config:
     # 模型权重路径（训练完后会生成在 results_uavvisloc/xxx/weights_end.pth）
-    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-23-16-43-07/weights_end.pth'
+    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k_convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-23-21-24-58/weights_end.pth'
     
     data_folder = "../Datasets/UAV_VisLoc_dataset"   # ←←← 改成你的数据集路径
     test_scene_ids = ['09', '10', '11']              # 测试场景
@@ -45,7 +45,8 @@ class Config:
     batch_size = 128
     top_k = 5                                        # 显示前几个最匹配的粗范围
 
-    model: str   = 'convnext_base.fb_in22k_ft_in1k'
+    sat_model: str   = 'convnext_base.fb_in22k_ft_in1k'
+    grd_model: str   = 'convnext_base.fb_in22k_ft_in1k'
     is_polar: bool = False
     image_size_sat = (img_size, img_size)
     img_size_ground = (img_size, img_size)
@@ -67,7 +68,8 @@ os.makedirs(config.save_dir, exist_ok=True)
 
 # ====================== 加载模型 ======================
 print("加载模型...")
-model = TimmModel(config.model,
+model = TimmModel(config.sat_model,
+                  config.grd_model,
                     config.image_size_sat,
                     config.img_size_ground,
                     psm=config.psm,
