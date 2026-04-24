@@ -255,6 +255,19 @@ def load_scene_samples(data_folder: str, scene_id: str, meta: SceneMeta, label_o
         # 提取航向角 Phi1
         phi = float(row['phi1']) if 'phi1' in row else 0.0
 
+        # ==================== 提取飞行高度 ====================
+        height = float(row['height'])
+        if pd.isna(height): 
+            print(f"Warning: Query {filename} height is NaN, using default 100.0")
+            height = 100.0  # 如果有缺失值，给一个默认基准高度
+        # try:
+        #     height = float(row['height'])
+        #     if pd.isna(height): 
+        #         height = 100.0  # 如果有缺失值，给一个默认基准高度
+        # except:
+        #     height = 100.0
+        # =====================================================
+
         drone_path = os.path.join(drone_dir, filename)
         if not os.path.exists(drone_path):
             n_skip += 1
@@ -271,8 +284,7 @@ def load_scene_samples(data_folder: str, scene_id: str, meta: SceneMeta, label_o
             n_skip += 1
             continue
             
-        # 返回元组增加 phi 字段
-        samples.append((drone_path, scene_id, x_pixel, y_pixel, lat, lon, label_offset + len(samples), phi))
+        samples.append((drone_path, scene_id, x_pixel, y_pixel, lat, lon, label_offset + len(samples), phi, height))
 
     return samples, len(samples)
 
@@ -329,17 +341,27 @@ class UAVVisLocDatasetTrain(Dataset):
 
     def __getitem__(self, index):
         idnum = self.samples[index]
-        drone_path, scene_id, x_pixel, y_pixel, lat, lon, label, phi = self.all_samples_info[idnum]
+        drone_path, scene_id, x_pixel, y_pixel, lat, lon, label, phi, height = self.all_samples_info[idnum]
 
         # ── 1. load query -> ground(drone) image ──
         query_img = cv2.imread(drone_path, cv2.IMREAD_GRAYSCALE)
         if query_img is None:
-            query_img = np.zeros((224, 224, 1), dtype=np.uint8)
+            query_img = np.zeros((256, 256, 1), dtype=np.uint8)
         else:
             query_img = rotate_uav_image_to_north(query_img, phi)  # 【正北对齐】
+        
+        # ================= 新增：动态尺度计算逻辑 =================
+        base_height = 100.0
+        
+        # 按照高度比例动态缩放裁剪框
+        dynamic_patch_size = int(self.sat_patch_size * (height / base_height))
+        
+        # 设置安全上下限，防止无人机过低(裁剪不到有用信息)或过高(爆显存)
+        dynamic_patch_size = max(128, min(dynamic_patch_size, 1024))
+        # =========================================================
 
         # ── 2. load reference -> satellite image ──
-        reference_img = read_patch_windowed(self.scene_metas[scene_id], x_pixel, y_pixel, self.sat_patch_size)
+        reference_img = read_patch_windowed(self.scene_metas[scene_id], x_pixel, y_pixel, dynamic_patch_size)
 
         # ── 3. Flip simultaneously query and reference ──
         if np.random.random() < self.prob_flip:
@@ -471,13 +493,13 @@ class UAVVisLocDatasetEval(Dataset):
             samples, n = load_scene_samples(data_folder, scene_id, meta, label_offset)
             
             # 分离 Query 和 Reference 存入 _items
-            for drone_path, s_id, x_pixel, y_pixel, lat, lon, lbl, phi in samples:
+            for drone_path, s_id, x_pixel, y_pixel, lat, lon, lbl, phi, height in samples:
                 if img_type == 'query':
-                    self._items.append((drone_path, phi)) # Eval 也需要存 phi 以便旋转
+                    self._items.append((drone_path, phi, height)) # Eval 也需要存 phi 以便旋转
                     self.query_gps.append((lat, lon))
                     self.query_scene_id.append(scene_id)
                 else:
-                    self._items.append((s_id, x_pixel, y_pixel))
+                    self._items.append((s_id, x_pixel, y_pixel, height))
                     self.ref_gps.append((lat, lon))
                 self.labels.append(lbl)
                 
@@ -490,15 +512,19 @@ class UAVVisLocDatasetEval(Dataset):
 
     def __getitem__(self, index):
         if self.img_type == 'query':
-            drone_path, phi = self._items[index]
+            drone_path, phi, height = self._items[index]
             img = cv2.imread(drone_path, cv2.IMREAD_GRAYSCALE)
             if img is None:
-                img = np.zeros((224, 224, 1), dtype=np.uint8)
+                img = np.zeros((256, 256, 1), dtype=np.uint8)
             else:
                 img = rotate_uav_image_to_north(img, phi)  # 【正北对齐】
         else:
-            scene_id, x_pixel, y_pixel = self._items[index]
-            img = read_patch_windowed(self.scene_metas[scene_id], x_pixel, y_pixel, self.sat_patch_size)
+            scene_id, x_pixel, y_pixel, height = self._items[index]
+            # 动态尺度计算
+            base_height = 100.0
+            dynamic_patch_size = int(self.sat_patch_size * (height / base_height))
+            dynamic_patch_size = max(128, min(dynamic_patch_size, 1024))
+            img = read_patch_windowed(self.scene_metas[scene_id], x_pixel, y_pixel, dynamic_patch_size)
 
         # image transforms
         if self.transforms is not None:
