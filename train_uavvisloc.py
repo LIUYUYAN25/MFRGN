@@ -22,6 +22,7 @@ import torch
 from dataclasses import dataclass, field
 from typing import List
 from torch.utils.data import DataLoader
+import pickle
 from torch.utils.tensorboard import SummaryWriter
 from transformers import (
     get_cosine_schedule_with_warmup,
@@ -210,6 +211,16 @@ if __name__ == '__main__':
     # DataLoader                                                                  #
     #-----------------------------------------------------------------------------#
 
+    # ------------------ 加载距离字典 ------------------
+    dict_path = 'pretrained/MFRGN-pretained/distance_dict/gps_dict_uavvisloc.pkl'
+    print(f"Loading distance dict from: {dict_path}")
+    with open(dict_path, 'rb') as f:
+        raw_dict = pickle.load(f)
+    
+    # 转换：提取 [(idx, dist), ...] 中的 idx，保证输入给 shuffle 函数的是纯索引
+    sim_dict = {k: [neighbor[0] for neighbor in v] for k, v in raw_dict.items()}
+    print(f"Loaded distance dict with {len(sim_dict)} anchors.")
+
     # Transforms
     # 无人机图和卫星 patch 都是俯视正方形，统一使用正方形变换
     sat_transforms_train, ground_transforms_train = get_transforms_train(
@@ -241,7 +252,7 @@ if __name__ == '__main__':
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=config.batch_size,
                                   num_workers=config.num_workers,
-                                  shuffle=True,
+                                  shuffle=False,
                                   pin_memory=True,
                                   drop_last=True)
 
@@ -375,7 +386,14 @@ if __name__ == '__main__':
 
     for epoch in range(1, config.epochs + 1):
 
-        # [对齐其他脚本] 打印格式统一使用 30*"-" + .format()，原代码使用 unicode "─" 字符
+        # ============= 每个 Epoch 动态构造包含难负样本的 Batch =============
+        # neighbour_select=4: 因为你平均只有 5.6 个邻居，选 4 个放进 Batch 最合适
+        # neighbour_range=16: 在最近的 16 个样本里去选
+        train_dataset.shuffle(sim_dict=sim_dict, 
+                              neighbour_select=4, 
+                              neighbour_range=16)
+        # ===============================================================
+
         print("\n{}[Epoch: {}/{}]{}".format(30*"-", epoch, config.epochs, 30*"-"))
         s2 = time.time()
 
