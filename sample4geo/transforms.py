@@ -40,6 +40,8 @@ def get_transforms_train(image_size_sat,
     
     satellite_transforms = A.Compose([
                                       A.ImageCompression(quality_lower=90, quality_upper=100, p=0.5),
+                                      A.ToGray(p=0.5),
+                                      A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=0.5),
                                       A.Resize(image_size_sat[0], image_size_sat[1], interpolation=cv2.INTER_AREA, p=1.0),
                                       A.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15, hue=0.15, always_apply=False, p=0.5),
                                       A.OneOf([
