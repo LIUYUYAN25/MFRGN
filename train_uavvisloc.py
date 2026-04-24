@@ -37,7 +37,7 @@ from sample4geo.transforms import get_transforms_train, get_transforms_val
 from sample4geo.utils import setup_system, Logger
 from sample4geo.trainer import train
 from sample4geo.evaluate.cvusa_and_cvact import evaluate
-from sample4geo.loss import InfoNCE, InfoNCEMargin, InfoNCEWithEdge
+from sample4geo.loss import InfoNCE, InfoNCEMargin, InfoNCEWithEdge, MultiSimilarityLoss
 from model.mfrgn_ir import TimmModel, TimmModel_u
 
 
@@ -301,6 +301,14 @@ if __name__ == '__main__':
                                 margin=0.1, 
                                 edge_weight=0.1, 
                                 device=config.device)
+    loss_function = MultiSimilarityLoss(alpha=2.0, 
+                                        beta=50.0, 
+                                        base=0.5, 
+                                        margin=0.1)
+    # 将模型中的 logit_scale 的 required_grad 设为 False (因为 MS Loss 自带超参，不再需要学习温度系数)
+    model.logit_scale.requires_grad = False
+    if hasattr(model, 'module'):
+        model.module.logit_scale.requires_grad = False
 
     # [修改] torch.cuda.amp.GradScaler 已在 PyTorch >= 2.0 中弃用
     # 改用新 API: torch.amp.GradScaler(device=...) 

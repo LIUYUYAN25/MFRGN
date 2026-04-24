@@ -128,3 +128,65 @@ class InfoNCEWithEdge(nn.Module):
         # 3. 总损失加权
         total_loss = contrastive_loss + self.edge_weight * edge_loss
         return total_loss
+
+class MultiSimilarityLoss(nn.Module):
+    def __init__(self, alpha=2.0, beta=50.0, base=0.5, margin=0.1):
+        """
+        Multi-Similarity Loss (对称/双向版本)
+        alpha: 控制正样本惩罚的尺度 (建议 2.0)
+        beta: 控制负样本惩罚的尺度 (建议 40.0 - 50.0)
+        base: 相似度基准值 (建议 0.5)
+        margin: 困难负样本挖掘的边界，只有相似度大于 (正样本相似度 - margin) 的负样本才会产生 Loss
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.base = base
+        self.margin = margin
+
+    def forward(self, features1, features2, logit_scale=None, **kwargs):
+        """
+        利用 logit_scale=None 和 **kwargs 吸收掉 trainer.py 传过来的额外参数(如 raw_img)，
+        这样你就不需要去改动 trainer.py 里的前向传播逻辑了。
+        """
+        # L2 归一化特征
+        features1 = F.normalize(features1, dim=-1)
+        features2 = F.normalize(features2, dim=-1)
+
+        # 计算 Batch 内的相似度矩阵 (B, B)
+        sim_mat = features1 @ features2.T
+        
+        # 内部函数：计算单向的 MS Loss
+        def compute_ms_loss(sim_matrix):
+            loss = 0.0
+            batch_size = sim_matrix.size(0)
+            
+            for i in range(batch_size):
+                # 1. 取出正样本相似度 (对角线元素)
+                pos_pair_sim = sim_matrix[i, i]
+                
+                # 2. 取出负样本相似度 (非对角线元素)
+                neg_pair_sim = torch.cat([sim_matrix[i, :i], sim_matrix[i, i+1:]])
+
+                # 3. MS Loss 核心机制：只保留“有威胁的”困难负样本
+                # 条件：负样本的相似度 + margin > 正样本的相似度
+                neg_stats = neg_pair_sim[neg_pair_sim + self.margin > pos_pair_sim]
+                
+                # 4. 计算正样本 Loss 分量
+                pos_loss = 1.0 / self.alpha * torch.log(1 + torch.exp(-self.alpha * (pos_pair_sim - self.base)))
+                
+                # 5. 计算负样本 Loss 分量 (指数加权，越相似的负样本惩罚越重)
+                if len(neg_stats) > 0:
+                    neg_loss = 1.0 / self.beta * torch.log(1 + torch.sum(torch.exp(self.beta * (neg_stats - self.base))))
+                else:
+                    neg_loss = 0.0
+                    
+                loss += (pos_loss + neg_loss)
+                
+            return loss / batch_size
+
+        # 计算双向 Loss 并求平均 (UAV检索Sat，以及Sat检索UAV)
+        loss_i2t = compute_ms_loss(sim_mat)        # features1 -> features2
+        loss_t2i = compute_ms_loss(sim_mat.T)      # features2 -> features1
+        
+        return (loss_i2t + loss_t2i) / 2.0
