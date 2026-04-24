@@ -406,9 +406,9 @@ class TimmModel(nn.Module):
         # 解耦 stem 和 stages[0]，强行让 grd 的深层 stages 指向 sat 的深层 stages
         # ================================================================= #
         # if 'convnext' in self.backbone_name.lower():
-        #     self.backbone_grd.backbone.stages[1] = self.backbone_sat.backbone.stages[1]
-        #     self.backbone_grd.backbone.stages[2] = self.backbone_sat.backbone.stages[2]
-        #     self.backbone_grd.backbone.stages[3] = self.backbone_sat.backbone.stages[3]
+        self.backbone_grd.backbone.stages[1] = self.backbone_sat.backbone.stages[1]
+        self.backbone_grd.backbone.stages[2] = self.backbone_sat.backbone.stages[2]
+        self.backbone_grd.backbone.stages[3] = self.backbone_sat.backbone.stages[3]
             
         # elif 'resnet' in self.backbone_name.lower():
         #     # 备用：如果你以后切换回 resnet，对应的共享逻辑是高层的 layer
