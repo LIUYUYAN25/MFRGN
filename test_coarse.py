@@ -35,10 +35,10 @@ from model.mfrgn_ir import TimmModel, TimmModel_u
 # ====================== 配置（请修改这里） ======================
 class Config:
     # 模型权重路径（训练完后会生成在 results_uavvisloc/xxx/weights_end.pth）
-    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k_convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-23-21-24-58/weights_end.pth'
+    weight_path = 'results_uavvisloc/convnext_base.fb_in22k_ft_in1k_convnext_base.fb_in22k_ft_in1k/mfrgn_uavvisloc_04-27-19-22-31/weights_end.pth'
     
     data_folder = "../Datasets/UAV_VisLoc_dataset"   # ←←← 改成你的数据集路径
-    test_scene_ids = ['09', '10', '11']              # 测试场景
+    test_scene_ids = ['03', '06', '09']              # 测试场景
     
     img_size = 256                                   # 必须和训练时一致
     sat_patch_size = 512                             # 必须和训练时一致
@@ -56,7 +56,7 @@ class Config:
     save_dir = "coarse_test_results"
     
     # 可视化设置
-    query_indices = [100, 510, 800, 1000, 1200]                    # 要测试的 query 索引（可多个）
+    query_indices = [510, 1000, 1560]                    # 要测试的 query 索引（可多个）
     
     # 大图绘制参数
     bigmap_window_size = 4096                     # 大图窗口边长（像素），可改 1024~4096
@@ -233,7 +233,7 @@ for q_idx in config.query_indices:
         cv2.rectangle(big_img,
                       (half - config.box_size//2, half - config.box_size//2),
                       (half + config.box_size//2, half + config.box_size//2),
-                      (0, 0, 255), 8)
+                      (0, 0, 255), 15)
 
         # Top-5 预测位置（绿框）——全部画出
         for rank, idx in enumerate(topk_indices):
@@ -245,13 +245,13 @@ for q_idx in config.query_indices:
             # 只画在窗口内的框
             if 0 <= dx < big_img.shape[1] and 0 <= dy < big_img.shape[0]:
                 color = (0, 255, 0) if rank == 0 else (0, 200, 100)
-                thickness = 5 if rank == 0 else 3
+                thickness = 4 if rank == 0 else 2.5
                 cv2.rectangle(big_img,
                               (dx - config.box_size//2, dy - config.box_size//2),
                               (dx + config.box_size//2, dy + config.box_size//2),
                               color, thickness)
                 cv2.putText(big_img, f"R{rank+1}", (dx-35, dy-35),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 4)
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
 
         big_save = os.path.join(config.save_dir, f"coarse_query_{q_idx:04d}_bigmap.png")
         cv2.imwrite(big_save, big_img)

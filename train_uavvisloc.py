@@ -69,10 +69,10 @@ class Configuration:
 
     # 场景划分
     train_scene_ids: List[str] = field(
-        default_factory=lambda: ['01', '02', '03', '04', '05', '06', '07', '08']
+        default_factory=lambda: ['01', '02', '04', '05', '07', '08', '10', '11']
     )
     val_scene_ids: List[str] = field(
-        default_factory=lambda: ['09', '10', '11']
+        default_factory=lambda: ['03', '06', '09']
     )
 
     is_polar: bool = False

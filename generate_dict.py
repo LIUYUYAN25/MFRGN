@@ -60,7 +60,7 @@ if __name__ == '__main__':
     # 这里的配置必须与 train_uavvisloc.py 严格一致
     # ==========================================
     data_folder = '../Datasets/UAV_VisLoc_dataset'
-    train_scene_ids = ['01', '02', '03', '04', '05', '06', '07', '08']
+    train_scene_ids = ['01', '02', '04', '05', '07', '08', '10', '11'] 
     
     print("正在初始化 UAVVisLocDatasetTrain (这可能需要一点时间来解析 TIF 文件并过滤非法样本)...")
     
