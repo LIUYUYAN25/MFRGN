@@ -39,7 +39,7 @@ def generate_gps_dict(dataset: UAVVisLocDatasetTrain, save_path: str, max_dist: 
             dist = haversine(lat1, lon1, lat2, lon2)
 
             # 只记录设定距离内的样本（作为难负样本挖掘的候选池）
-            if dist <= max_dist:
+            if 50 <= dist <= max_dist:
                 neighbors.append((j, dist))
 
         # 按照距离从小到大排序，方便后续优先抽取更近的难负样本
@@ -76,7 +76,7 @@ if __name__ == '__main__':
     # 你可以把 pkl 保存在 MFRGN-pretained 预训练文件夹中，保持和源码结构一致
     save_path = 'pretrained/MFRGN-pretained/distance_dict/gps_dict_uavvisloc.pkl'
     
-    # 判定为“难负样本”的最大距离范围（单位：米）
-    max_hard_negative_dist = 200 
+    # 判定为“难负样本”的最大距离范围
+    max_hard_negative_dist = 500 
     
     generate_gps_dict(train_dataset, save_path, max_dist=max_hard_negative_dist)

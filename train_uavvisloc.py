@@ -296,15 +296,18 @@ if __name__ == '__main__':
 
     # [对齐其他脚本] 先构造 loss_fn 再传入 InfoNCE，风格与 cvact/cvusa/university 一致
     loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
-    # loss_function = InfoNCEMargin(loss_function=loss_fn, device=config.device)
+    # loss_function = InfoNCEMargin(loss_function=loss_fn, 
+    #                               device=config.device, 
+    #                               margin=0.2
+    #                              )
     loss_function = InfoNCEWithEdge(loss_function=loss_fn, 
-                                margin=0.1, 
+                                margin=0.2, 
                                 edge_weight=0.1, 
                                 device=config.device)
-    loss_function = MultiSimilarityLoss(alpha=2.0, 
-                                        beta=50.0, 
-                                        base=0.5, 
-                                        margin=0.1)
+    # loss_function = MultiSimilarityLoss(alpha=2.0, 
+    #                                     beta=1.0, 
+    #                                     base=0.5, 
+    #                                     margin=0.1)
     # 将模型中的 logit_scale 的 required_grad 设为 False (因为 MS Loss 自带超参，不再需要学习温度系数)
     model.logit_scale.requires_grad = False
     if hasattr(model, 'module'):
