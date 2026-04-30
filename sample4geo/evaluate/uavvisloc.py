@@ -1,6 +1,7 @@
 """
-sample4geo/evaluate/uavvisloc.py
+sample4geo/evaluate/uav_visloc.py
 ================================
+基于物理 GPS 动态距离阈值（按飞行高度自适应）的 UAV-VisLoc 评估脚本。
 """
 
 import os
@@ -12,6 +13,25 @@ import gc
 import copy
 from ..trainer import predict, predict_dual
 
+def haversine_distance_matrix(query_gps, ref_gps):
+    """
+    计算 Query 和 Reference 之间的真实地理距离矩阵 (单位: 米)
+    """
+    query_rad = np.radians(query_gps)
+    ref_rad = np.radians(ref_gps)
+    
+    lat1, lon1 = query_rad[:, 0:1], query_rad[:, 1:2]
+    lat2, lon2 = ref_rad[:, 0], ref_rad[:, 1]
+    
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    
+    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    r = 6371000 # 地球平均半径，单位: 米
+    
+    return c * r
+
 def evaluate(config,
              model,
              reference_dataloader,
@@ -21,12 +41,12 @@ def evaluate(config,
              is_autocast=True,
              is_dual=False,
              cleanup=True,
-             save_csv=None):
+             save_csv=None,
+             alpha=0.1):  # 【修改】使用比例系数 alpha 取代固定的 threshold_m
     
     print("\nExtract Features:")
     s1 = time.time()
     
-    # 提取特征
     if is_dual:
         query_features, reference_features, query_labels, reference_labels = predict_dual(
             config, model, query_dataloader, reference_dataloader, is_autocast=is_autocast)
@@ -36,82 +56,82 @@ def evaluate(config,
         reference_features, reference_labels = predict(
             config, model, reference_dataloader, is_autocast=is_autocast) 
         
-    if save_csv is not None:
-        print('Saving features to .csv ...')
-        features_q = np.array(query_features.detach().cpu())
-        features_r = np.array(reference_features.detach().cpu())
-        os.makedirs('results', exist_ok=True)
-        np.savetxt(f"results/features_q_{save_csv}.csv", features_q, delimiter=",")
-        np.savetxt(f"results/features_r_{save_csv}.csv", features_r, delimiter=",")
-
     s2 = time.time()
     print('Extract Features time: {:.2f} s'.format(s2 - s1))
     
-    print("\nCompute Scores:")
+    # 获取 GPS 数据
+    query_gps = np.array(query_dataloader.dataset.query_gps)
+    ref_gps = np.array(reference_dataloader.dataset.ref_gps)
+    
+    # 【新增】获取无人机的飞行高度
+    # 在你的 UAVVisLocDatasetEval 中，_items 存储的是 (drone_path, phi, height)
+    query_heights = np.array([item[2] for item in query_dataloader.dataset._items])
+    
+    print("\nCompute Scores (Dynamic GPS Threshold: alpha = {} * Height):".format(alpha))
     s = time.time()
-    # 获取计算的各项 Recall 结果
-    r1, r5, r10, r_top1 = calculate_scores(
-        query_features, reference_features, query_labels, reference_labels, 
-        step_size=step_size, ranks=ranks)
+    r1, r5, r10, r_top1 = calculate_scores_by_dynamic_gps(
+        query_features, reference_features, query_gps, ref_gps, query_heights,
+        step_size=step_size, ranks=ranks, alpha=alpha)
     e = time.time()
     print('Compute Scores time: {:.2f} s\n'.format(e - s))
 
-    # 释放显存
     if cleanup:
         del reference_features, reference_labels, query_features, query_labels
         gc.collect()
         torch.cuda.empty_cache()
     
-    # 修改：返回所有 Recall 值，以修复 train_uavvisloc.py 中变量未定义的问题
     return r1, r5, r10, r_top1
 
-def calculate_scores(query_features, reference_features, query_labels, reference_labels, step_size=1000, ranks=[1,5,10]):
+def calculate_scores_by_dynamic_gps(query_features, reference_features, query_gps, ref_gps, query_heights, step_size=1000, ranks=[1,5,10], alpha=0.1):
     topk = copy.deepcopy(ranks)
     Q = len(query_features)
     R = len(reference_features)
     
+    # 1. 计算地理距离矩阵 (Q, R)
+    distance_matrix = haversine_distance_matrix(query_gps, ref_gps)
+    
+    # 2. 分块计算余弦相似度矩阵 (Q, R)
     steps = Q // step_size + 1
-    
-    query_labels_np = query_labels.cpu().numpy()
-    reference_labels_np = reference_labels.cpu().numpy()
-    
-    # 创建字典，将 label 映射到 reference 矩阵的索引
-    ref2index = dict()
-    for i, idx in enumerate(reference_labels_np):
-        ref2index[idx] = i
-    
     similarity = []
-    
-    # 分块计算余弦相似度矩阵，避免 OOM
     for i in range(steps):
         start = step_size * i
         end = start + step_size
         sim_tmp = query_features[start:end] @ reference_features.T
         similarity.append(sim_tmp.cpu())
-     
-    # 得到完整的 Q x R 相似度矩阵
-    similarity = torch.cat(similarity, dim=0)
+    similarity = torch.cat(similarity, dim=0) # (Q, R)
     
-    # 追加 top 1% 对应的序号 (R // 100)
     topk.append(max(1, R // 100))
+    max_k = min(max(topk), R)
     
     results = np.zeros([len(topk)])
     
+    # 3. 取出前 max_k 个最高相似度的索引
+    _, topk_indices = torch.topk(similarity, k=max_k, dim=1)
+    topk_indices = topk_indices.numpy() 
+    
+    valid_queries = 0
     bar = tqdm(range(Q), ncols=100, position=0, leave=True)
     
+    # 4. 基于动态距离阈值计算 Recall
     for i in bar:
-        # 获取真值对 (Ground Truth) 的相似度
-        gt_sim = similarity[i, ref2index[query_labels_np[i]]]
+        dists_i = distance_matrix[i]
         
-        # 统计相似度比真值对还高的数量 (即排名)
-        higher_sim = similarity[i,:] > gt_sim
-        ranking = higher_sim.sum()
+        # 【核心逻辑修改】：阈值等于当前无人机高度乘以 alpha (最小兜底 20 米)
+        dynamic_threshold = max(20.0, query_heights[i] * alpha) 
+        
+        true_mask = dists_i <= dynamic_threshold
+        
+        if not np.any(true_mask):
+            continue
+            
+        valid_queries += 1
         
         for j, k in enumerate(topk):
-            if ranking < k:
-                results[j] += 1.
+            pred_k_indices = topk_indices[i, :k]
+            if np.any(true_mask[pred_k_indices]):
+                results[j] += 1.0
                         
-    results = results / Q * 100.
+    results = results / valid_queries * 100.
     bar.close()
     time.sleep(0.1)
     

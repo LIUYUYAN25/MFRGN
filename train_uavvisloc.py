@@ -394,8 +394,10 @@ if __name__ == '__main__':
                            query_dataloader=query_dataloader_val,
                            ranks=[1, 5, 10],
                            step_size=1000,
+                           is_autocast=True,
                            is_dual=True,
-                           cleanup=True)
+                           cleanup=True,
+                           alpha=0.1)
 
     #-----------------------------------------------------------------------------#
     # Train                                                                       #
@@ -459,7 +461,8 @@ if __name__ == '__main__':
                                step_size=1000,
                                is_dual=True,
                                is_autocast=True,
-                               cleanup=True)
+                               cleanup=True,
+                               alpha=0.1)
 
             # [保留] TensorBoard 记录 Recall@1（其他脚本无此项，本脚本特有）
             writer.add_scalar('Eval/Recall@1', r1_test, epoch)
