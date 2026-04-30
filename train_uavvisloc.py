@@ -29,6 +29,10 @@ from transformers import (
     get_polynomial_decay_schedule_with_warmup,
     get_constant_schedule_with_warmup,
 )
+import matplotlib.pyplot as plt
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -396,6 +400,12 @@ if __name__ == '__main__':
     #-----------------------------------------------------------------------------#
     # Train                                                                       #
     #-----------------------------------------------------------------------------#
+    history_epochs = []
+    history_train_loss = []
+    history_lr = []
+    
+    history_eval_epochs = []
+    history_recall_1 = []
     best_score = 0
 
     for epoch in range(1, config.epochs + 1):
@@ -424,6 +434,14 @@ if __name__ == '__main__':
                                                                     train_loss,
                                                                     optimizer.param_groups[0]['lr']))
 
+        current_lr = optimizer.param_groups[0]['lr']
+        history_epochs.append(epoch)
+        history_train_loss.append(train_loss)
+        history_lr.append(current_lr)
+        
+        writer.add_scalar('Train/Loss', train_loss, epoch)
+        writer.add_scalar('Train/LR', current_lr, epoch)
+
         s3 = time.time()
         print('train: ', (s3 - s2) / 60, 'min')
 
@@ -445,6 +463,9 @@ if __name__ == '__main__':
 
             # [保留] TensorBoard 记录 Recall@1（其他脚本无此项，本脚本特有）
             writer.add_scalar('Eval/Recall@1', r1_test, epoch)
+
+            history_eval_epochs.append(epoch)
+            history_recall_1.append(r1_test)
 
             if r1_test > best_score:
                 best_score = r1_test
@@ -468,3 +489,50 @@ if __name__ == '__main__':
     print("\nTraining finished. Best Recall@1: {:.4f}".format(best_score))
     print("Weights saved to: {}".format(model_path))
     writer.close()
+
+    # ---------------------------------------------------------
+    # 绘制曲线图
+    print("\nGenerating evaluation plots for thesis...")
+    
+    # 图 1：训练 Loss 收敛曲线
+    plt.figure(figsize=(8, 6))
+    plt.plot(history_epochs, history_train_loss, marker='o', linestyle='-', color='b', label='Train Loss')
+    plt.title('Training Loss Convergence', fontsize=14)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_path, 'thesis_plot_train_loss.pdf')) # 保存为高质量矢量图PDF
+    plt.savefig(os.path.join(model_path, 'thesis_plot_train_loss.png'), dpi=300)
+    plt.close()
+
+    # 图 2：测试集 Recall@1 曲线
+    if len(history_eval_epochs) > 0:
+        plt.figure(figsize=(8, 6))
+        plt.plot(history_eval_epochs, history_recall_1, marker='s', linestyle='-', color='r', label='Recall@1')
+        plt.title('Evaluation Recall@1', fontsize=14)
+        plt.xlabel('Epoch', fontsize=12)
+        plt.ylabel('Recall@1 (%)', fontsize=12)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend(fontsize=12)
+        plt.tight_layout()
+        plt.savefig(os.path.join(model_path, 'thesis_plot_recall.pdf'))
+        plt.savefig(os.path.join(model_path, 'thesis_plot_recall.png'), dpi=300)
+        plt.close()
+
+    # 图 3：学习率衰减曲线
+    plt.figure(figsize=(8, 6))
+    plt.plot(history_epochs, history_lr, marker='^', linestyle='-', color='g', label='Learning Rate')
+    plt.title('Learning Rate Schedule', fontsize=14)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Learning Rate', fontsize=12)
+    plt.yscale('log') # 学习率通常用对数坐标轴展示更好看
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_path, 'thesis_plot_lr.png'), dpi=300)
+    plt.close()
+
+    print(f"Plots saved successfully in {model_path}!")
+    # ---------------------------------------------------------
