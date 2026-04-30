@@ -40,7 +40,7 @@ from sample4geo.dataset.uavvisloc import UAVVisLocDatasetTrain, UAVVisLocDataset
 from sample4geo.transforms import get_transforms_train, get_transforms_val
 from sample4geo.utils import setup_system, Logger
 from sample4geo.trainer import train
-from sample4geo.evaluate.cvusa_and_cvact import evaluate
+from sample4geo.evaluate.uavvisloc import evaluate
 from sample4geo.loss import InfoNCE, InfoNCEMargin, InfoNCEWithEdge, MultiSimilarityLoss
 from model.mfrgn_ir import TimmModel, TimmModel_u
 
@@ -388,7 +388,7 @@ if __name__ == '__main__':
     if config.zero_shot:
         print("\n{}[{}]{}".format(30*"-", "Zero Shot", 30*"-"))
 
-        r1_test = evaluate(config=config,
+        r1_test, r5_test, r10_test, r_top1_test = evaluate(config=config,
                            model=model,
                            reference_dataloader=reference_dataloader_val,
                            query_dataloader=query_dataloader_val,
@@ -451,7 +451,7 @@ if __name__ == '__main__':
 
             print("\n{}[{}]{}".format(30*"-", "Evaluate", 30*"-"))
 
-            r1_test = evaluate(config=config,
+            r1_test, r5_test, r10_test, r_top1_test = evaluate(config=config,
                                model=model,
                                reference_dataloader=reference_dataloader_val,
                                query_dataloader=query_dataloader_val,
