@@ -552,6 +552,8 @@ class TimmModel(nn.Module):
 
             grd_H, grd_L = self.transformer_grd_H(H_grd_embed, L_grd_embed)
             grd_L, grd_H = self.transformer_grd_L(grd_L, grd_H)
+            # sat_H, sat_L = H_sat_embed, L_sat_embed
+            # grd_H, grd_L = H_grd_embed, L_grd_embed
 
             sat = torch.cat([sat_L, sat_H], dim=1) # (B, L_sat, d_model)
             grd = torch.cat([grd_L, grd_H], dim=1) # (B, L_grd, d_model)
@@ -695,6 +697,27 @@ class TimmModel(nn.Module):
         
         results = torch.cat(geo_att, dim=-1).contiguous()
         return results
+
+    # def _gpab(self, local_feats, global_feats, proj, ch_att, sp_att, h, w):
+    #     geo_att = []
+    #     for i, feat in enumerate(local_feats):
+    #         # 获取 batch_size
+    #         b = feat.shape[0] 
+            
+    #         # 保持数据维度处理不变 (适配 psm=True 的情况)
+    #         if self.sample and i == 0:
+    #             feat = feat.unsqueeze(-1)
+
+    #         # ===== [Ablation: 关闭 GPAB 的注意力加权] =====
+    #         # 完全抛弃 global_feat, att_ch, att_sp 的计算
+    #         # 直接将原始的 local feature (feat) 送入池化层
+    #         m = self.avg_pool(feat)
+    #         # ===========================================
+
+    #         geo_att.append(m.view(b, -1))
+        
+    #     results = torch.cat(geo_att, dim=-1).contiguous()
+    #     return results
 
 
     def _dim(self, model_name, strides, img_size=[122, 671]):

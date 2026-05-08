@@ -69,7 +69,7 @@ class InfoNCEMargin(nn.Module):
         return loss
 
 class InfoNCEWithEdge(nn.Module):
-    def __init__(self, loss_function, margin=0.1, edge_weight=0.1, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self, loss_function, margin=0.1, edge_weight=0.4, device='cuda' if torch.cuda.is_available() else 'cpu'):
         """
         在 InfoNCEMargin 基础上增加 Sobel 边缘约束。
         edge_weight: 边缘损失的权重，建议初值设为 0.1。

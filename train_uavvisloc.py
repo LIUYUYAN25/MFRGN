@@ -416,8 +416,8 @@ if __name__ == '__main__':
         # neighbour_select=4: 因为你平均只有 5.6 个邻居，选 4 个放进 Batch 最合适
         # neighbour_range=16: 在最近的 16 个样本里去选
         train_dataset.shuffle(sim_dict=sim_dict, 
-                              neighbour_select=4, 
-                              neighbour_range=16)
+                              neighbour_select=15, 
+                              neighbour_range=50)
         # ===============================================================
 
         print("\n{}[Epoch: {}/{}]{}".format(30*"-", epoch, config.epochs, 30*"-"))

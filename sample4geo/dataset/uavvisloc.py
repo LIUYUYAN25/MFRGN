@@ -49,6 +49,7 @@ def rotate_uav_image_to_north(image: np.ndarray, phi: float) -> np.ndarray:
     
     # angle = 90.0 - float(phi)
     angle = -float(phi)  # 直接使用负的 phi 进行旋转，使得无人机图像正北对齐(进一步检查！！！)
+    # angle = 0.0 # 消融实验：不进行旋转
     h, w = image.shape[:2]
     
     # 1. 以最短边为基准，先进行中心裁剪成正方形
